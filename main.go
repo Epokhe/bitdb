@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"os"
+	"github.com/epokhe/lsm-tree/db"
 )
 
 func check(e error) {
@@ -14,21 +14,19 @@ func check(e error) {
 func main() {
 	fmt.Println("Initializing db!")
 
-	dbname := "main.db"
-	writer, err := os.OpenFile(dbname, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
-	check(err)
-	defer writer.Close()
+	testDb, err := db.Open("main.db")
+	defer testDb.Close()
 
-	err = set(writer, "13", "val2")
+	err = testDb.Set("13", "val2")
 	check(err)
 
-	err = set(writer, "42", "test")
+	err = testDb.Set("42", "test")
 	check(err)
 
-	data, err := get(dbname, "13")
+	data, err := testDb.Get("13")
 	fmt.Println(data, err)
 
-	data, err = get(dbname, "14")
+	data, err = testDb.Get("14")
 	fmt.Println(data, err)
 
 }
