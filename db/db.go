@@ -12,7 +12,13 @@ type DB struct {
 	writer *os.File
 }
 
-var ErrKeyNotFound = fmt.Errorf("key not found")
+type KeyNotFoundError struct {
+	Key string
+}
+
+func (e *KeyNotFoundError) Error() string {
+	return fmt.Sprintf("key %q not found", e.Key)
+}
 
 func Open(path string) (*DB, error) {
 	writer, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
@@ -44,7 +50,7 @@ func (db *DB) Get(key string) (string, error) {
 
 	}
 
-	return "", ErrKeyNotFound
+	return "", &KeyNotFoundError{Key: key}
 }
 
 func (db *DB) Set(key string, val string) error {
