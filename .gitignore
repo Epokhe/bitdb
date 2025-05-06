@@ -1,0 +1,49 @@
+# --- Go artifacts ---
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of go coverage tool
+*.out
+
+# Vendor directory (if you check in dependencies, remove this)
+vendor/
+
+# Build directories
+bin/
+build/
+
+# Module cache (uncomment if you ever accidentally check in)
+# GOMODCACHE
+
+# --- IDE / editor files ---
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+out/
+
+# VS Code
+.vscode/
+
+# Vim swap files
+*.swp
+
+# Mac filesystem
+.DS_Store
+
+# Logs and temp files
+*.log
+tmp/
+
+
+# Project specific files
+
+# db file
+*.db
