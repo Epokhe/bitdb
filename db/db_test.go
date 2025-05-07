@@ -2,6 +2,7 @@ package db
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -76,8 +77,7 @@ func TestKeyNotFound(t *testing.T) {
 	defer db.Close()
 
 	var val string
-	err := db.Get(&GetArgs{Key: "missing"}, &val)
-	if _, ok := err.(*KeyNotFoundError); !ok {
+	if err := db.Get(&GetArgs{Key: "missing"}, &val); !errors.Is(err, ErrKeyNotFound) {
 		t.Errorf("expected KeyNotFoundError, got %v", err)
 	}
 }
@@ -131,8 +131,7 @@ func TestEmptyDB(t *testing.T) {
 	defer db.Close()
 
 	var v string
-	err := db.Get(&GetArgs{"nope"}, &v)
-	if _, ok := err.(*KeyNotFoundError); !ok {
+	if err := db.Get(&GetArgs{"nope"}, &v); !errors.Is(err, ErrKeyNotFound) {
 		t.Errorf("expected KeyNotFoundError on empty DB, got %v", err)
 	}
 }
@@ -178,10 +177,10 @@ func TestTruncatedHeader(t *testing.T) {
 		t.Errorf("expected x→y, got %q, %v", v, err)
 	}
 
-	err = db.Get(&GetArgs{"<garbage>"}, &v)
-	if _, ok := err.(*KeyNotFoundError); !ok {
+	if err = db.Get(&GetArgs{"<garbage>"}, &v); !errors.Is(err, ErrKeyNotFound) {
 		t.Errorf("expected missing key, got %v", err)
 	}
+
 }
 
 func TestTruncatedKey(t *testing.T) {
@@ -229,8 +228,7 @@ func TestTruncatedValue(t *testing.T) {
 	if err := db.Get(&GetArgs{"k"}, &v); err != nil || v != "v" {
 		t.Errorf("expected k→v, got %q, %v", v, err)
 	}
-	err = db.Get(&GetArgs{"hi"}, &v)
-	if _, ok := err.(*KeyNotFoundError); !ok {
+	if err = db.Get(&GetArgs{"hi"}, &v); !errors.Is(err, ErrKeyNotFound) {
 		t.Errorf("expected hi missing, got %v", err)
 	}
 }
@@ -248,7 +246,7 @@ func TestOverwriteAfterPartialAppend(t *testing.T) {
 	}
 
 	// Capture the offset where “c” would go:
-	offC := db.curOffset
+	offC := db.offset
 
 	// 2) Simulate a crash *during* the third Set:
 	//    manually open the same file and write only half of the 8-byte header

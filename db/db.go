@@ -10,20 +10,14 @@ import (
 )
 
 type DB struct {
-	path      string
-	file      *os.File
-	writer    *bufio.Writer
-	index     map[string]int64
-	curOffset int64
+	path   string
+	file   *os.File
+	writer *bufio.Writer
+	index  map[string]int64
+	offset int64
 }
 
-type KeyNotFoundError struct {
-	Key string
-}
-
-func (e *KeyNotFoundError) Error() string {
-	return fmt.Sprintf("key %q not found", e.Key)
-}
+var ErrKeyNotFound = errors.New("key not found")
 
 func loadIndex(reader *bufio.Reader, index map[string]int64) (int64, error) {
 	var offset int64 = 0
@@ -76,15 +70,12 @@ func loadIndex(reader *bufio.Reader, index map[string]int64) (int64, error) {
 
 	}
 
-	//fmt.Println(index)
-
 	return offset, nil
 }
 
 func Open(path string) (*DB, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
-		f.Close()
 		return nil, err
 	}
 
@@ -102,16 +93,26 @@ func Open(path string) (*DB, error) {
 		return nil, err
 	}
 
+	// Go to the "new" end of the file in case it's truncated
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return nil, err
+	}
+
 	w := bufio.NewWriter(f)
 
-	return &DB{file: f, writer: w, path: path, index: index, curOffset: offset}, nil
+	return &DB{file: f, writer: w, path: path, index: index, offset: offset}, nil
 }
 
 func (db *DB) Close() error {
-	// flush buffered writes
+	// flush buffered bytes into the OS page cache
 	// yesss, on power loss we lose these
 	// ignored for now
 	if err := db.writer.Flush(); err != nil {
+		return err
+	}
+
+	// block until the OS has flushed those pages to stable storage
+	if err := db.file.Sync(); err != nil {
 		return err
 	}
 
@@ -129,26 +130,23 @@ type GetArgs struct {
 //
 // I'm okay with two syscalls, no need to optimize them
 // because they don't lead to two disk reads thanks to page cache
-func (db *DB) readValueAt(off int64) (key, val string, err error) {
+func (db *DB) readValueAt(off int64) (val string, err error) {
 	// Read both lengths at once
 	var hdr [8]byte
 	if _, err = db.file.ReadAt(hdr[:], off); err != nil {
-		println("here i faield")
-		return "", "", err
+		return "", err
 	}
 	keyLen := int(binary.LittleEndian.Uint32(hdr[0:4]))
 	valLen := int(binary.LittleEndian.Uint32(hdr[4:8]))
 
 	// Read key+val in one go
-	buf := make([]byte, keyLen+valLen)
-	if _, err = db.file.ReadAt(buf, off+8); err != nil {
-		return "", "", err
+	buf := make([]byte, valLen)
+	if _, err = db.file.ReadAt(buf, off+8+int64(keyLen)); err != nil {
+		return "", err
 	}
 
-	// Slice it apart
-	key = string(buf[:keyLen])
-	val = string(buf[keyLen:])
-	return key, val, nil
+	val = string(buf)
+	return val, nil
 }
 
 func (db *DB) Get(args *GetArgs, reply *string) error {
@@ -157,10 +155,10 @@ func (db *DB) Get(args *GetArgs, reply *string) error {
 	recordOffset, ok := db.index[key]
 	if !ok {
 		// if not on index, the key doesn't exist
-		return &KeyNotFoundError{Key: key}
+		return fmt.Errorf("%w: %q", ErrKeyNotFound, key)
 	}
 
-	_, val, err := db.readValueAt(recordOffset)
+	val, err := db.readValueAt(recordOffset)
 	if err != nil {
 		// this is an unexpected error, because if key is on index,
 		// its corresponding value should exist on the disk file
@@ -183,31 +181,29 @@ type SetArgs struct {
 //	[val bytes]                      ← one write
 //
 // returns the total length
-func writeKV(w *bufio.Writer, key, val string) (int, error) {
+func writeKV(w *bufio.Writer, key, val string) (totalLen int, err error) {
 	// Build an 8-byte header on the stack
 	var hdr [8]byte
 	binary.LittleEndian.PutUint32(hdr[0:4], uint32(len(key)))
 	binary.LittleEndian.PutUint32(hdr[4:8], uint32(len(val)))
 
 	// Write header
-	total := 0
-	n, err := w.Write(hdr[:])
-	total += n
+	_, err = w.Write(hdr[:])
 	if err != nil {
-		return total, err
+		return totalLen, err
 	}
 
 	// Write key
-	n, err = w.WriteString(key)
-	total += n
+	_, err = w.WriteString(key)
 	if err != nil {
-		return total, err
+		return totalLen, err
 	}
 
 	// Write value
-	n, err = w.WriteString(val)
-	total += n
-	return total, err
+	_, err = w.WriteString(val)
+
+	totalLen = 8 + len(key) + len(val)
+	return totalLen, err
 }
 
 func (db *DB) Set(args *SetArgs, _ *struct{}) error {
@@ -230,11 +226,6 @@ func (db *DB) Set(args *SetArgs, _ *struct{}) error {
 	//  any data. let's introduce a group commit option that can be used with low latency
 	//  my guess is that it won't have a big impact in a high throughput scenario.
 
-	// TODO:
-	//  instead of newline maybe add value with its length,
-	//  so we could directly read correct amount of bytes,
-	//  and don't need to search for newline character on disk
-
 	// write key-value with length-prefix
 	writeLen, err := writeKV(db.writer, key, val)
 
@@ -255,11 +246,10 @@ func (db *DB) Set(args *SetArgs, _ *struct{}) error {
 	// add offset to index
 	// if power is lost just before this line, no prob,
 	// index will be rebuilt anyway
-	db.index[key] = db.curOffset
-	//fmt.Println(off)
+	db.index[key] = db.offset
 
 	// move offset by the written byte count
-	db.curOffset += int64(writeLen)
+	db.offset += int64(writeLen)
 
 	return err
 }
