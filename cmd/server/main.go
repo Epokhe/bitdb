@@ -58,7 +58,13 @@ func main() {
 		<-sigCh
 		log.Println("Shutting down...")
 		listener.Close() // stop accepting new conns
-		mainDb.Close()   // flush & close file
+
+		// flush & close file
+		if err := mainDb.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to persist to disk: %v\n", err)
+			os.Exit(1)
+		}
+
 		os.Exit(0)
 	}()
 

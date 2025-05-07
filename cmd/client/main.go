@@ -15,8 +15,7 @@ func usage() {
 }
 
 func main() {
-	// os.Args[0] is program name; we need at least action and key
-	if len(os.Args) < 3 {
+	if len(os.Args) < 2 {
 		usage()
 	}
 
