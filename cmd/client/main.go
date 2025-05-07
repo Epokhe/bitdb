@@ -3,44 +3,43 @@ package main
 import (
 	"fmt"
 	"github.com/epokhe/lsm-tree/db"
+	"net/rpc"
 	"os"
 )
 
 func usage() {
 	fmt.Fprintf(os.Stderr, "usage:\n")
-	fmt.Fprintf(os.Stderr, "  lsm-tree get <key>\n")
-	fmt.Fprintf(os.Stderr, "  lsm-tree set <key> <value>\n")
+	fmt.Fprintf(os.Stderr, "  client get <key>\n")
+	fmt.Fprintf(os.Stderr, "  client set <key> <value>\n")
 	os.Exit(1)
 }
 
 func main() {
-
-	dbPath := "main.db"
 	// os.Args[0] is program name; we need at least action and key
 	if len(os.Args) < 3 {
 		usage()
 	}
 
 	action := os.Args[1]
-	key := os.Args[2]
 
 	switch action {
 	case "get":
 		if len(os.Args) != 3 {
 			usage()
 		}
+		key := os.Args[2]
 
-		mainDb, err := db.Open(dbPath)
+		client, err := rpc.Dial("tcp", "localhost:1234")
 		if err != nil {
-			// print to stderr, then exit with non‑zero code
-			fmt.Fprintf(os.Stderr, "failed to open database: %v\n", err)
+			fmt.Fprintf(os.Stderr, "failed to dial rpc: %v\n", err)
 			os.Exit(1)
 		}
-		defer mainDb.Close()
+		var val string
 
-		val, err := mainDb.Get(key)
+		err = client.Call("DB.Get", db.GetArgs{Key: key}, &val)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to get the key: %v\n", err)
+			os.Exit(1)
 		}
 
 		fmt.Println(val)
@@ -49,21 +48,24 @@ func main() {
 		if len(os.Args) != 4 {
 			usage()
 		}
+		key := os.Args[2]
 		val := os.Args[3]
 
-		mainDb, err := db.Open(dbPath)
+		client, err := rpc.Dial("tcp", "localhost:1234")
 		if err != nil {
-			// print to stderr, then exit with non‑zero code
-			fmt.Fprintf(os.Stderr, "failed to open database: %v\n", err)
+			fmt.Fprintf(os.Stderr, "failed to dial rpc: %v\n", err)
 			os.Exit(1)
 		}
-		defer mainDb.Close()
 
-		err = mainDb.Set(key, val)
+		var setReply struct{}
+
+		err = client.Call("DB.Set", &db.SetArgs{Key: key, Val: val}, &setReply)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to set the key: %v\n", err)
 			os.Exit(1)
 		}
+
+		fmt.Println("done")
 
 	default:
 		fmt.Fprintf(os.Stderr, "unknown action %q\n", action)

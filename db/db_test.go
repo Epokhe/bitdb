@@ -34,14 +34,14 @@ func TestSetAndGet(t *testing.T) {
 	defer cleanup()
 	defer db.Close()
 
-	// set a key and retrieve it
-	err := db.Set("foo", "bar")
-	if err != nil {
+	// set a key and retrieve it using new RPC-style signatures
+	setArgs := &SetArgs{Key: "foo", Val: "bar"}
+	if err := db.Set(setArgs, &struct{}{}); err != nil {
 		t.Fatalf("Set failed: %v", err)
 	}
 
-	val, err := db.Get("foo")
-	if err != nil {
+	var val string
+	if err := db.Get(&GetArgs{Key: "foo"}, &val); err != nil {
 		t.Fatalf("Get returned error: %v", err)
 	}
 	if val != "bar" {
@@ -55,11 +55,11 @@ func TestOverwrite(t *testing.T) {
 	defer db.Close()
 
 	// set a key twice
-	db.Set("key", "first")
-	db.Set("key", "second")
+	db.Set(&SetArgs{Key: "key", Val: "first"}, &struct{}{})
+	db.Set(&SetArgs{Key: "key", Val: "second"}, &struct{}{})
 
-	val, err := db.Get("key")
-	if err != nil {
+	var val string
+	if err := db.Get(&GetArgs{Key: "key"}, &val); err != nil {
 		t.Fatalf("Get returned error: %v", err)
 	}
 	if val != "second" {
@@ -72,9 +72,9 @@ func TestKeyNotFound(t *testing.T) {
 	defer cleanup()
 	defer db.Close()
 
-	_, err := db.Get("missing")
-	_, ok := err.(*KeyNotFoundError)
-	if !ok {
-		t.Errorf("expected ErrKeyNotFound, got %v", err)
+	var val string
+	err := db.Get(&GetArgs{Key: "missing"}, &val)
+	if _, ok := err.(*KeyNotFoundError); !ok {
+		t.Errorf("expected KeyNotFoundError, got %v", err)
 	}
 }

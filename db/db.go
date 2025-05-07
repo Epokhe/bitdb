@@ -34,26 +34,38 @@ func (db *DB) Close() error {
 	return db.writer.Close()
 }
 
-func (db *DB) Get(key string) (string, error) {
+type GetArgs struct {
+	Key string
+}
+
+func (db *DB) Get(args *GetArgs, reply *string) error {
+	key := args.Key
 	data, err := os.ReadFile(db.path)
 	if err != nil {
-		return "", err
+		return err
 	}
 
 	lines := s.Split(string(data), "\n")
 	for _, line := range slices.Backward(lines) {
-		//fmt.Println(i, line)
 		k, v, found := s.Cut(line, ",")
 		if found && k == key {
-			return v, nil
+			*reply = v
+			return nil
 		}
-
 	}
 
-	return "", &KeyNotFoundError{Key: key}
+	return &KeyNotFoundError{Key: key}
 }
 
-func (db *DB) Set(key string, val string) error {
+type SetArgs struct {
+	Key string
+	Val string
+}
+
+func (db *DB) Set(args *SetArgs, _ *struct{}) error {
+	key := args.Key
+	val := args.Val
+
 	serialized := fmt.Sprintf("%s,%s\n", key, val)
 	_, err := db.writer.WriteString(serialized)
 	return err
