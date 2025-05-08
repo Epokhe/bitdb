@@ -234,11 +234,14 @@ func (db *DB) Set(args *SetArgs, _ *struct{}) error {
 	// todo: this only guarantees read-after-write when no host failure happens
 	//  in the future versions I have to also fsync
 	//  but for that, I will do group commit
+	// this costs 4us on average(set takes 34us). It's very low cost actually.
 	if err := db.writer.Flush(); err != nil {
 		return err
 	}
 
 	// I could use db.file.Sync() if I want fsync‐per‐write durability
+	// fsync is crazy, it costs like 5ms. We could only accept this
+	// in group commit scenario.
 
 	// add offset to index
 	// if power is lost just before this line, no prob,
