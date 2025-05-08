@@ -2,11 +2,12 @@
 
 Results for `38ea150a45a96f39a8583273cd23eb369c9d17c9`
 ```
-Benchmark_RPC_Get-10    	2025/05/08 03:23:44 rpc.Serve: accept:accept tcp [::]:1234: use of closed network connection
-   37900	     31189 ns/op	     499 B/op	      18 allocs/op
-Benchmark_RPC_Set-10    	2025/05/08 03:23:46 rpc.Serve: accept:accept tcp [::]:1234: use of closed network connection
-   35313	     34751 ns/op	     653 B/op	      19 allocs/op
+Benchmark_RPC_Get-10    	2025/05/08 03:43:57 rpc.Serve: accept:accept tcp [::]:1234: use of closed network connection
+39168	     32176 ns/op	     499 B/op	      18 allocs/op
+Benchmark_RPC_Set-10    	2025/05/08 03:43:59 rpc.Serve: accept:accept tcp [::]:1234: use of closed network connection
+37246	     36354 ns/op	     647 B/op	      19 allocs/op
 ```
+
 
 Results for `987ec559493fbc62bea7760532ee42733e290483`
 ```

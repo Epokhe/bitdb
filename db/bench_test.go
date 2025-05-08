@@ -18,7 +18,7 @@ func Benchmark_RPC_Get(b *testing.B) {
 
 	// preload some keys so Get has something to fetch
 	client, _ := rpc.Dial("tcp", addr)
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 10000; i++ {
 		key := fmt.Sprintf("k%04d", i)
 		client.Call("DB.Set", &SetArgs{Key: key, Val: "v"}, new(struct{}))
 	}

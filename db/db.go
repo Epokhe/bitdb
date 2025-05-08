@@ -211,9 +211,6 @@ func (db *DB) Set(args *SetArgs, _ *struct{}) error {
 	val := args.Val
 
 	// TODO:
-	//  benchmark it
-
-	// TODO:
 	//  figure out why sometimes on ctrl+c it says file already closed
 
 	// TODO:
