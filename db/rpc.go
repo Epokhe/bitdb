@@ -1,7 +1,10 @@
-package main
+package db
 
 import (
+	"fmt"
+	"net"
 	"net/rpc"
+	"os"
 	"reflect"
 	"sync"
 	"unsafe"
@@ -36,4 +39,41 @@ func ListRegisteredMethods(server *rpc.Server) []string {
 	})
 
 	return methods
+}
+
+func StartRPC(mainDb *DB, addr string) (listenAddr string, cleanup func(), err error) {
+	// Register the rpc server
+	server := rpc.NewServer()
+	if err := server.RegisterName("DB", mainDb); err != nil {
+		mainDb.Close()
+		return "", nil, err
+	}
+
+	// List exactly what net/rpc has registered
+	//for _, m := range ListRegisteredMethods(server) {
+	//	fmt.Println(m)
+	//}
+
+	// Listen on TCP
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		mainDb.Close()
+		return "", nil, err
+	}
+
+	// Serve in the background
+	go server.Accept(listener)
+
+	// Return the actual address and a cleanup callback
+	cleanup = func() {
+		listener.Close() // stop accepting new conns
+
+		// flush & close file
+		if err := mainDb.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to persist to disk: %v\n", err)
+			os.Exit(1)
+		}
+
+	}
+	return listener.Addr().String(), cleanup, nil
 }

@@ -9,34 +9,8 @@ import (
 	"testing"
 )
 
-func setupTempDb(t *testing.T) (*os.File, *DB, func()) {
-	t.Helper()
-	// create a temp file
-	f, err := os.CreateTemp("", "kvstore_test_*.db")
-	if err != nil {
-		t.Fatalf("failed to create temp file: %v", err)
-	}
-	// remove file on cleanup
-	// I defer closing until test ends, because file may be deleted by OS maybe?
-	cleanup := func() {
-		f.Close()
-		os.Remove(f.Name())
-	}
-
-	// open our DB instance using the file
-	db, err := Open(f.Name())
-	if err != nil {
-		cleanup()
-		t.Fatalf("failed to open DB: %v", err)
-	}
-
-	return f, db, cleanup
-}
-
 func TestSetAndGet(t *testing.T) {
-	_, db, cleanup := setupTempDb(t)
-	defer cleanup()
-	defer db.Close()
+	_, db := setupTempDb(t)
 
 	// set a key and retrieve it using new RPC-style signatures
 	setArgs := &SetArgs{Key: "foo", Val: "bar"}
@@ -54,9 +28,7 @@ func TestSetAndGet(t *testing.T) {
 }
 
 func TestOverwrite(t *testing.T) {
-	_, db, cleanup := setupTempDb(t)
-	defer cleanup()
-	defer db.Close()
+	_, db := setupTempDb(t)
 
 	// set a key twice
 	db.Set(&SetArgs{Key: "key", Val: "first"}, &struct{}{})
@@ -72,9 +44,7 @@ func TestOverwrite(t *testing.T) {
 }
 
 func TestKeyNotFound(t *testing.T) {
-	_, db, cleanup := setupTempDb(t)
-	defer cleanup()
-	defer db.Close()
+	_, db := setupTempDb(t)
 
 	var val string
 	if err := db.Get(&GetArgs{Key: "missing"}, &val); !errors.Is(err, ErrKeyNotFound) {
@@ -83,16 +53,14 @@ func TestKeyNotFound(t *testing.T) {
 }
 
 func TestPersistence(t *testing.T) {
-	f, db, cleanup := setupTempDb(t)
-	defer cleanup()
-	defer db.Close()
+	path, db := setupTempDb(t)
 
 	db.Set(&SetArgs{"a", "1"}, &struct{}{})
 	db.Set(&SetArgs{"b", "2"}, &struct{}{})
 	db.Close()
 
 	// Re-open
-	db2, err := Open(f.Name())
+	db2, err := Open(path)
 	if err != nil {
 		t.Fatalf("reopen failed: %v", err)
 	}
@@ -108,16 +76,14 @@ func TestPersistence(t *testing.T) {
 }
 
 func TestLoadIndexOverwrite(t *testing.T) {
-	f, db, cleanup := setupTempDb(t)
-	defer cleanup()
-	defer db.Close()
+	path, db := setupTempDb(t)
 
 	db.Set(&SetArgs{"foo", "first"}, &struct{}{})
 	db.Set(&SetArgs{"foo", "second"}, &struct{}{})
 	db.Close()
 
 	// Now reopen and Get should return “second”
-	db2, _ := Open(f.Name())
+	db2, _ := Open(path)
 	defer db2.Close()
 	var v string
 	if err := db2.Get(&GetArgs{"foo"}, &v); err != nil || v != "second" {
@@ -126,9 +92,7 @@ func TestLoadIndexOverwrite(t *testing.T) {
 }
 
 func TestEmptyDB(t *testing.T) {
-	_, db, cleanup := setupTempDb(t)
-	defer cleanup()
-	defer db.Close()
+	_, db := setupTempDb(t)
 
 	var v string
 	if err := db.Get(&GetArgs{"nope"}, &v); !errors.Is(err, ErrKeyNotFound) {
@@ -137,9 +101,7 @@ func TestEmptyDB(t *testing.T) {
 }
 
 func TestManyKeys(t *testing.T) {
-	_, db, cleanup := setupTempDb(t)
-	defer cleanup()
-	defer db.Close()
+	_, db := setupTempDb(t)
 
 	for i := 0; i < 1000; i++ {
 		k, v := fmt.Sprintf("k%03d", i), fmt.Sprintf("v%03d", i)
@@ -234,8 +196,7 @@ func TestTruncatedValue(t *testing.T) {
 }
 
 func TestOverwriteAfterPartialAppend(t *testing.T) {
-	f, db, cleanup := setupTempDb(t)
-	defer cleanup()
+	path, db := setupTempDb(t)
 
 	// 1) Write two good records: “a”→“1”, “b”→“2”
 	if err := db.Set(&SetArgs{"a", "1"}, &struct{}{}); err != nil {
@@ -250,7 +211,7 @@ func TestOverwriteAfterPartialAppend(t *testing.T) {
 
 	// 2) Simulate a crash *during* the third Set:
 	//    manually open the same file and write only half of the 8-byte header
-	f, err := os.OpenFile(f.Name(), os.O_WRONLY, 0)
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatalf("open for corrupt: %v", err)
 	}
