@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"github.com/epokhe/lsm-tree/cmd/remote"
+	"log"
 	"net/rpc"
 	"os"
 )
@@ -30,15 +31,13 @@ func main() {
 
 		client, err := rpc.Dial("tcp", "localhost:1234")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to dial rpc: %v\n", err)
-			os.Exit(1)
+			log.Fatalf("failed to dial rpc: %v\n", err)
 		}
 		var val string
 
 		err = client.Call("DB.Get", &remote.GetArgs{Key: key}, &val)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to get the key: %v\n", err)
-			os.Exit(1)
+			log.Fatalf("failed to get the key: %v\n", err)
 		}
 
 		fmt.Println(val)
@@ -52,16 +51,14 @@ func main() {
 
 		client, err := rpc.Dial("tcp", "localhost:1234")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to dial rpc: %v\n", err)
-			os.Exit(1)
+			log.Fatalf("failed to dial rpc: %v\n", err)
 		}
 
 		var setReply struct{}
 
 		err = client.Call("DB.Set", &remote.SetArgs{Key: key, Val: val}, &setReply)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to set the key: %v\n", err)
-			os.Exit(1)
+			log.Fatalf("failed to set the key: %v\n", err)
 		}
 
 		fmt.Println("done")

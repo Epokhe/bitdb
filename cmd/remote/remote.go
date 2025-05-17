@@ -1,11 +1,10 @@
 package remote
 
 import (
-	"fmt"
 	"github.com/epokhe/lsm-tree/core"
+	"log"
 	"net"
 	"net/rpc"
-	"os"
 	"reflect"
 	"sync"
 	"unsafe"
@@ -73,8 +72,7 @@ func StartRPC(db *core.DB, addr string) (listenAddr string, cleanup func(), err 
 
 		// flush & close file
 		if err := db.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to persist to disk: %v\n", err)
-			os.Exit(1)
+			log.Fatalf("failed to persist to disk: %v\n", err)
 		}
 
 	}
