@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/epokhe/lsm-tree/db"
+	"github.com/epokhe/lsm-tree/core"
 	"net"
 	"net/rpc"
 	"os"
@@ -42,7 +42,7 @@ func ListRegisteredMethods(server *rpc.Server) []string {
 	return methods
 }
 
-func StartRPC(mainDb *db.DB, addr string) (listenAddr string, cleanup func(), err error) {
+func StartRPC(mainDb *core.DB, addr string) (listenAddr string, cleanup func(), err error) {
 	// Register the rpc server
 	server := rpc.NewServer()
 	if err := server.RegisterName("DB", mainDb); err != nil {

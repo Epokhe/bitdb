@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/epokhe/lsm-tree/db"
+	"github.com/epokhe/lsm-tree/core"
 	"log"
 	"os"
 	"os/signal"
@@ -28,7 +28,7 @@ func main() {
 	}
 
 	// Open the database
-	mainDb, err := db.Open(*dbPath)
+	mainDb, err := core.Open(*dbPath)
 	if err != nil {
 		log.Fatalf("could not open the database: %v", err)
 	}

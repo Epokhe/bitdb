@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	db2 "github.com/epokhe/lsm-tree/db"
+	db2 "github.com/epokhe/lsm-tree/core"
 	"net/rpc"
 	"testing"
 )
