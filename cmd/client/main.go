@@ -29,7 +29,7 @@ func main() {
 		}
 		key := os.Args[2]
 
-		client, err := rpc.Dial("tcp", "localhost:1234")
+		client, err := rpc.Dial("tcp", "localhost:1729")
 		if err != nil {
 			log.Fatalf("failed to dial rpc: %v\n", err)
 		}

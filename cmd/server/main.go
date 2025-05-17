@@ -20,7 +20,7 @@ func usage() {
 func main() {
 	var (
 		dbPath = flag.String("db", "", "path to data file")
-		addr   = flag.String("addr", ":1234", "RPC listen address")
+		addr   = flag.String("addr", ":1729", "RPC listen address")
 	)
 	flag.Parse()
 
