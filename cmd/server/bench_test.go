@@ -2,16 +2,17 @@ package main
 
 import (
 	"fmt"
-	db2 "github.com/epokhe/lsm-tree/core"
+	rpc2 "github.com/epokhe/lsm-tree/cmd/rpc"
+	"github.com/epokhe/lsm-tree/core"
 	"net/rpc"
 	"testing"
 )
 
 func Benchmark_RPC_Get(b *testing.B) {
-	_, db := db2.SetupTempDb(b)
+	_, db := core.SetupTempDb(b)
 
 	// start the RPC server on that file
-	addr, cleanup, err := StartRPC(db, ":1234")
+	addr, cleanup, err := rpc2.StartRPC(db, ":1234")
 	if err != nil {
 		b.Fatalf("start server: %v", err)
 	}
@@ -21,20 +22,20 @@ func Benchmark_RPC_Get(b *testing.B) {
 	client, _ := rpc.Dial("tcp", addr)
 	for i := 0; i < 10000; i++ {
 		key := fmt.Sprintf("k%04d", i)
-		client.Call("DB.Set", &db2.SetArgs{Key: key, Val: "v"}, new(struct{}))
+		client.Call("DB.Set", &rpc2.SetArgs{Key: key, Val: "v"}, new(struct{}))
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		client.Call("DB.Get", &db2.GetArgs{Key: "k0050"}, new(string))
+		client.Call("DB.Get", &rpc2.GetArgs{Key: "k0050"}, new(string))
 	}
 }
 
 func Benchmark_RPC_Set(b *testing.B) {
-	_, db := db2.SetupTempDb(b)
+	_, db := core.SetupTempDb(b)
 
 	// start the RPC server on that file
-	addr, cleanup, err := StartRPC(db, ":1234")
+	addr, cleanup, err := rpc2.StartRPC(db, ":1234")
 	if err != nil {
 		b.Fatalf("start server: %v", err)
 	}
@@ -50,7 +51,7 @@ func Benchmark_RPC_Set(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		key := fmt.Sprintf("k%08d", i)
 		// we ignore the reply (empty struct)
-		if err := client.Call("DB.Set", &db2.SetArgs{Key: key, Val: "value"}, new(struct{})); err != nil {
+		if err := client.Call("DB.Set", &rpc2.SetArgs{Key: key, Val: "value"}, new(struct{})); err != nil {
 			b.Fatalf("Set RPC failed: %v", err)
 		}
 	}

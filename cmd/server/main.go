@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/epokhe/lsm-tree/cmd/rpc"
 	"github.com/epokhe/lsm-tree/core"
 	"log"
 	"os"
@@ -28,14 +29,14 @@ func main() {
 	}
 
 	// Open the database
-	mainDb, err := core.Open(*dbPath)
+	db, err := core.Open(*dbPath)
 	if err != nil {
 		log.Fatalf("could not open the database: %v", err)
 	}
 
 	// startRPC opens the DB, registers it, listens & serves.
 	// Returns a cleanup func that closes the listener and DB.
-	listenAddr, cleanup, err := StartRPC(mainDb, *addr)
+	listenAddr, cleanup, err := rpc.StartRPC(db, *addr)
 	if err != nil {
 		log.Fatalf("could not start RPC server: %v", err)
 	}

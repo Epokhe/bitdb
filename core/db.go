@@ -19,6 +19,53 @@ type DB struct {
 
 var ErrKeyNotFound = errors.New("key not found")
 
+func Open(path string) (*DB, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return nil, err
+	}
+
+	reader := bufio.NewReader(f)
+	index := make(map[string]int64)
+	offset, err := loadIndex(reader, index)
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+
+	// in case where we have a corrupted record,
+	//we truncate to the last "good" offset
+	if err := f.Truncate(offset); err != nil {
+		return nil, err
+	}
+
+	// Go to the "new" end of the file in case it's truncated
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return nil, err
+	}
+
+	w := bufio.NewWriter(f)
+
+	return &DB{file: f, writer: w, path: path, index: index, offset: offset}, nil
+}
+
+func (db *DB) Close() error {
+	// flush buffered bytes into the OS page cache
+	// yesss, on power loss we lose these
+	// ignored for now
+	if err := db.writer.Flush(); err != nil {
+		return err
+	}
+
+	// block until the OS has flushed those pages to stable storage
+	if err := db.file.Sync(); err != nil {
+		return err
+	}
+
+	// close the file
+	return db.file.Close()
+}
+
 func loadIndex(reader *bufio.Reader, index map[string]int64) (int64, error) {
 	var offset int64 = 0
 
@@ -73,142 +120,25 @@ func loadIndex(reader *bufio.Reader, index map[string]int64) (int64, error) {
 	return offset, nil
 }
 
-func Open(path string) (*DB, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		return nil, err
-	}
-
-	reader := bufio.NewReader(f)
-	index := make(map[string]int64)
-	offset, err := loadIndex(reader, index)
-	if err != nil {
-		f.Close()
-		return nil, err
-	}
-
-	// in case where we have a corrupted record,
-	//we truncate to the last "good" offset
-	if err := f.Truncate(offset); err != nil {
-		return nil, err
-	}
-
-	// Go to the "new" end of the file in case it's truncated
-	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return nil, err
-	}
-
-	w := bufio.NewWriter(f)
-
-	return &DB{file: f, writer: w, path: path, index: index, offset: offset}, nil
-}
-
-func (db *DB) Close() error {
-	// flush buffered bytes into the OS page cache
-	// yesss, on power loss we lose these
-	// ignored for now
-	if err := db.writer.Flush(); err != nil {
-		return err
-	}
-
-	// block until the OS has flushed those pages to stable storage
-	if err := db.file.Sync(); err != nil {
-		return err
-	}
-
-	// close the file
-	return db.file.Close()
-}
-
-type GetArgs struct {
-	Key string
-}
-
-// readValueAt reads back a single record at offset `off` in two syscalls:
-//  1. ReadAt 8 bytes → header[0:4]==keyLen, header[4:8]==valLen
-//  2. ReadAt keyLen+valLen bytes → payload
-//
-// I'm okay with two syscalls, no need to optimize them
-// because they don't lead to two disk reads thanks to page cache
-func (db *DB) readValueAt(off int64) (val string, err error) {
-	// Read both lengths at once
-	var hdr [8]byte
-	if _, err = db.file.ReadAt(hdr[:], off); err != nil {
-		return "", err
-	}
-	keyLen := int(binary.LittleEndian.Uint32(hdr[0:4]))
-	valLen := int(binary.LittleEndian.Uint32(hdr[4:8]))
-
-	// Read key+val in one go
-	buf := make([]byte, valLen)
-	if _, err = db.file.ReadAt(buf, off+8+int64(keyLen)); err != nil {
-		return "", err
-	}
-
-	val = string(buf)
-	return val, nil
-}
-
-func (db *DB) Get(args *GetArgs, reply *string) error {
-	key := args.Key
+func (db *DB) Get(key string) (string, error) {
 
 	recordOffset, ok := db.index[key]
 	if !ok {
 		// if not on index, the key doesn't exist
-		return fmt.Errorf("%w: %q", ErrKeyNotFound, key)
+		return "", fmt.Errorf("%w: %q", ErrKeyNotFound, key)
 	}
 
 	val, err := db.readValueAt(recordOffset)
 	if err != nil {
 		// this is an unexpected error, because if key is on index,
 		// its corresponding value should exist on the disk file
-		return err
+		return "", err
 	}
 
-	*reply = val
-	return nil
+	return val, nil
 }
 
-type SetArgs struct {
-	Key string
-	Val string
-}
-
-// writeKV now emits:
-//
-//	[4-byte keyLen][4-byte valLen]  ← one 8-byte write
-//	[key bytes]                      ← one write
-//	[val bytes]                      ← one write
-//
-// returns the total length
-func writeKV(w *bufio.Writer, key, val string) (totalLen int, err error) {
-	// Build an 8-byte header on the stack
-	var hdr [8]byte
-	binary.LittleEndian.PutUint32(hdr[0:4], uint32(len(key)))
-	binary.LittleEndian.PutUint32(hdr[4:8], uint32(len(val)))
-
-	// Write header
-	_, err = w.Write(hdr[:])
-	if err != nil {
-		return totalLen, err
-	}
-
-	// Write key
-	_, err = w.WriteString(key)
-	if err != nil {
-		return totalLen, err
-	}
-
-	// Write value
-	_, err = w.WriteString(val)
-
-	totalLen = 8 + len(key) + len(val)
-	return totalLen, err
-}
-
-func (db *DB) Set(args *SetArgs, _ *struct{}) error {
-	key := args.Key
-	val := args.Val
+func (db *DB) Set(key, val string) error {
 
 	// TODO:
 	//  figure out why sometimes on ctrl+c it says file already closed
@@ -252,4 +182,61 @@ func (db *DB) Set(args *SetArgs, _ *struct{}) error {
 	db.offset += int64(writeLen)
 
 	return err
+}
+
+// readValueAt reads back a single record at offset `off` in two syscalls:
+//  1. ReadAt 8 bytes → header[0:4]==keyLen, header[4:8]==valLen
+//  2. ReadAt keyLen+valLen bytes → payload
+//
+// I'm okay with two syscalls, no need to optimize them
+// because they don't lead to two disk reads thanks to page cache
+func (db *DB) readValueAt(off int64) (val string, err error) {
+	// Read both lengths at once
+	var hdr [8]byte
+	if _, err = db.file.ReadAt(hdr[:], off); err != nil {
+		return "", err
+	}
+	keyLen := int(binary.LittleEndian.Uint32(hdr[0:4]))
+	valLen := int(binary.LittleEndian.Uint32(hdr[4:8]))
+
+	// Read key+val in one go
+	buf := make([]byte, valLen)
+	if _, err = db.file.ReadAt(buf, off+8+int64(keyLen)); err != nil {
+		return "", err
+	}
+
+	val = string(buf)
+	return val, nil
+}
+
+// writeKV now emits:
+//
+//	[4-byte keyLen][4-byte valLen]  ← one 8-byte write
+//	[key bytes]                      ← one write
+//	[val bytes]                      ← one write
+//
+// returns the total length
+func writeKV(w *bufio.Writer, key, val string) (totalLen int, err error) {
+	// Build an 8-byte header on the stack
+	var hdr [8]byte
+	binary.LittleEndian.PutUint32(hdr[0:4], uint32(len(key)))
+	binary.LittleEndian.PutUint32(hdr[4:8], uint32(len(val)))
+
+	// Write header
+	_, err = w.Write(hdr[:])
+	if err != nil {
+		return totalLen, err
+	}
+
+	// Write key
+	_, err = w.WriteString(key)
+	if err != nil {
+		return totalLen, err
+	}
+
+	// Write value
+	_, err = w.WriteString(val)
+
+	totalLen = 8 + len(key) + len(val)
+	return totalLen, err
 }

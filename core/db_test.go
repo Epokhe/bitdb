@@ -12,17 +12,14 @@ import (
 func TestSetAndGet(t *testing.T) {
 	_, db := SetupTempDb(t)
 
-	// set a key and retrieve it using new RPC-style signatures
-	setArgs := &SetArgs{Key: "foo", Val: "bar"}
-	if err := db.Set(setArgs, &struct{}{}); err != nil {
+	// set a key and retrieve it
+	if err := db.Set("foo", "bar"); err != nil {
 		t.Fatalf("Set failed: %v", err)
 	}
 
-	var val string
-	if err := db.Get(&GetArgs{Key: "foo"}, &val); err != nil {
+	if val, err := db.Get("foo"); err != nil {
 		t.Fatalf("Get returned error: %v", err)
-	}
-	if val != "bar" {
+	} else if val != "bar" {
 		t.Errorf("expected 'bar', got '%s'", val)
 	}
 }
@@ -31,14 +28,12 @@ func TestOverwrite(t *testing.T) {
 	_, db := SetupTempDb(t)
 
 	// set a key twice
-	db.Set(&SetArgs{Key: "key", Val: "first"}, &struct{}{})
-	db.Set(&SetArgs{Key: "key", Val: "second"}, &struct{}{})
+	db.Set("key", "first")
+	db.Set("key", "second")
 
-	var val string
-	if err := db.Get(&GetArgs{Key: "key"}, &val); err != nil {
+	if val, err := db.Get("key"); err != nil {
 		t.Fatalf("Get returned error: %v", err)
-	}
-	if val != "second" {
+	} else if val != "second" {
 		t.Errorf("expected 'second', got '%s'", val)
 	}
 }
@@ -46,8 +41,7 @@ func TestOverwrite(t *testing.T) {
 func TestKeyNotFound(t *testing.T) {
 	_, db := SetupTempDb(t)
 
-	var val string
-	if err := db.Get(&GetArgs{Key: "missing"}, &val); !errors.Is(err, ErrKeyNotFound) {
+	if _, err := db.Get("missing"); !errors.Is(err, ErrKeyNotFound) {
 		t.Errorf("expected KeyNotFoundError, got %v", err)
 	}
 }
@@ -55,8 +49,8 @@ func TestKeyNotFound(t *testing.T) {
 func TestPersistence(t *testing.T) {
 	path, db := SetupTempDb(t)
 
-	db.Set(&SetArgs{"a", "1"}, &struct{}{})
-	db.Set(&SetArgs{"b", "2"}, &struct{}{})
+	db.Set("a", "1")
+	db.Set("b", "2")
 	db.Close()
 
 	// Re-open
@@ -66,36 +60,33 @@ func TestPersistence(t *testing.T) {
 	}
 	defer db2.Close()
 
-	var v string
-	if err := db2.Get(&GetArgs{"a"}, &v); err != nil || v != "1" {
-		t.Errorf("expected a=1 after reopen, got %q, %v", v, err)
+	if val, err := db2.Get("a"); err != nil || val != "1" {
+		t.Errorf("expected a=1 after reopen, got %q, %v", val, err)
 	}
-	if err := db2.Get(&GetArgs{"b"}, &v); err != nil || v != "2" {
-		t.Errorf("expected b=2 after reopen, got %q, %v", v, err)
+	if val, err := db2.Get("b"); err != nil || val != "2" {
+		t.Errorf("expected b=2 after reopen, got %q, %v", val, err)
 	}
 }
 
 func TestLoadIndexOverwrite(t *testing.T) {
 	path, db := SetupTempDb(t)
 
-	db.Set(&SetArgs{"foo", "first"}, &struct{}{})
-	db.Set(&SetArgs{"foo", "second"}, &struct{}{})
+	db.Set("foo", "first")
+	db.Set("foo", "second")
 	db.Close()
 
 	// Now reopen and Get should return “second”
 	db2, _ := Open(path)
 	defer db2.Close()
-	var v string
-	if err := db2.Get(&GetArgs{"foo"}, &v); err != nil || v != "second" {
-		t.Errorf("wanted final ‘second’, got %q", v)
+	if val, err := db2.Get("foo"); err != nil || val != "second" {
+		t.Errorf("wanted final ‘second’, got %q", val)
 	}
 }
 
 func TestEmptyDB(t *testing.T) {
 	_, db := SetupTempDb(t)
 
-	var v string
-	if err := db.Get(&GetArgs{"nope"}, &v); !errors.Is(err, ErrKeyNotFound) {
+	if _, err := db.Get("nope"); !errors.Is(err, ErrKeyNotFound) {
 		t.Errorf("expected KeyNotFoundError on empty DB, got %v", err)
 	}
 }
@@ -105,14 +96,13 @@ func TestManyKeys(t *testing.T) {
 
 	for i := 0; i < 1000; i++ {
 		k, v := fmt.Sprintf("k%03d", i), fmt.Sprintf("v%03d", i)
-		if err := db.Set(&SetArgs{k, v}, &struct{}{}); err != nil {
+		if err := db.Set(k, v); err != nil {
 			t.Fatalf("Set %d failed: %v", i, err)
 		}
 	}
 	for i := 0; i < 1000; i++ {
 		k, want := fmt.Sprintf("k%03d", i), fmt.Sprintf("v%03d", i)
-		var got string
-		if err := db.Get(&GetArgs{k}, &got); err != nil || got != want {
+		if got, err := db.Get(k); err != nil || got != want {
 			t.Errorf("Get %q = %q, %v; want %q", k, got, err, want)
 		}
 	}
@@ -134,12 +124,11 @@ func TestTruncatedHeader(t *testing.T) {
 		t.Fatalf("Open on truncated header: %v", err)
 	}
 	defer db.Close()
-	var v string
-	if err := db.Get(&GetArgs{"x"}, &v); err != nil || v != "y" {
-		t.Errorf("expected x→y, got %q, %v", v, err)
+	if val, err := db.Get("x"); err != nil || val != "y" {
+		t.Errorf("expected x→y, got %q, %v", val, err)
 	}
 
-	if err = db.Get(&GetArgs{"<garbage>"}, &v); !errors.Is(err, ErrKeyNotFound) {
+	if _, err = db.Get("<garbage>"); !errors.Is(err, ErrKeyNotFound) {
 		t.Errorf("expected missing key, got %v", err)
 	}
 
@@ -186,11 +175,10 @@ func TestTruncatedValue(t *testing.T) {
 	defer db.Close()
 
 	// only the first good record should be indexed
-	var v string
-	if err := db.Get(&GetArgs{"k"}, &v); err != nil || v != "v" {
-		t.Errorf("expected k→v, got %q, %v", v, err)
+	if val, err := db.Get("k"); err != nil || val != "v" {
+		t.Errorf("expected k→v, got %q, %v", val, err)
 	}
-	if err = db.Get(&GetArgs{"hi"}, &v); !errors.Is(err, ErrKeyNotFound) {
+	if _, err = db.Get("hi"); !errors.Is(err, ErrKeyNotFound) {
 		t.Errorf("expected hi missing, got %v", err)
 	}
 }
@@ -199,10 +187,10 @@ func TestOverwriteAfterPartialAppend(t *testing.T) {
 	path, db := SetupTempDb(t)
 
 	// 1) Write two good records: “a”→“1”, “b”→“2”
-	if err := db.Set(&SetArgs{"a", "1"}, &struct{}{}); err != nil {
+	if err := db.Set("a", "1"); err != nil {
 		t.Fatalf("Set a=1: %v", err)
 	}
-	if err := db.Set(&SetArgs{"b", "2"}, &struct{}{}); err != nil {
+	if err := db.Set("b", "2"); err != nil {
 		t.Fatalf("Set b=2: %v", err)
 	}
 
@@ -235,16 +223,14 @@ func TestOverwriteAfterPartialAppend(t *testing.T) {
 	defer db2.Close()
 
 	// 4) Now do the real Set("c","3") — it *must* go at offC, overwriting the garbage.
-	if err := db2.Set(&SetArgs{"c", "3"}, &struct{}{}); err != nil {
+	if err := db2.Set("c", "3"); err != nil {
 		t.Fatalf("Set c=3: %v", err)
 	}
 
 	// 5) And now Get("c") should succeed
-	var got string
-	if err := db2.Get(&GetArgs{"c"}, &got); err != nil {
+	if got, err := db2.Get("c"); err != nil {
 		t.Fatalf("Get c failed: %v", err)
-	}
-	if got != "3" {
+	} else if got != "3" {
 		t.Errorf("expected c→3 after overwrite, got %q", got)
 	}
 }
