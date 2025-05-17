@@ -36,6 +36,7 @@ func main() {
 		var val string
 
 		err = client.Call("DB.Get", &remote.GetArgs{Key: key}, &val)
+		// todo don't give fatal if error is key not found
 		if err != nil {
 			log.Fatalf("failed to get the key: %v\n", err)
 		}
@@ -49,7 +50,7 @@ func main() {
 		key := os.Args[2]
 		val := os.Args[3]
 
-		client, err := rpc.Dial("tcp", "localhost:1234")
+		client, err := rpc.Dial("tcp", "localhost:1729")
 		if err != nil {
 			log.Fatalf("failed to dial rpc: %v\n", err)
 		}

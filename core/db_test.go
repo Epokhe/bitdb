@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -109,9 +110,10 @@ func TestManyKeys(t *testing.T) {
 }
 
 func TestTruncatedHeader(t *testing.T) {
+	dir, db := SetupTempDb(t)
+
 	// Manually write a valid record + only half of the next header
-	f, _ := os.CreateTemp("", "kv_test")
-	defer os.Remove(f.Name())
+	f, _ := os.Create(filepath.Join(dir, "kv_test"))
 	// header+key+val of (“x”→“y”)
 	f.Write([]byte("\x01\x00\x00\x00\x01\x00\x00\x00xy"))
 	// now write only 2 of the next 8 header bytes
@@ -119,11 +121,10 @@ func TestTruncatedHeader(t *testing.T) {
 	f.Close()
 
 	// Open should succeed, index should only contain “x”
-	db, err := Open(f.Name())
+	db, err := Open(dir)
 	if err != nil {
 		t.Fatalf("Open on truncated header: %v", err)
 	}
-	defer db.Close()
 	if val, err := db.Get("x"); err != nil || val != "y" {
 		t.Errorf("expected x→y, got %q, %v", val, err)
 	}
@@ -131,33 +132,33 @@ func TestTruncatedHeader(t *testing.T) {
 	if _, err = db.Get("<garbage>"); !errors.Is(err, ErrKeyNotFound) {
 		t.Errorf("expected missing key, got %v", err)
 	}
-
 }
 
 func TestTruncatedKey(t *testing.T) {
+	dir, db := SetupTempDb(t)
+
 	// write header for keyLen=3,valLen=2, then only 1 byte of the key
-	f, _ := os.CreateTemp("", "kv")
-	defer os.Remove(f.Name())
+	f, _ := os.Create(filepath.Join(dir, "kv"))
 	// header: keyLen=3,valLen=2
 	f.Write([]byte{3, 0, 0, 0, 2, 0, 0, 0})
 	// only 1 of the 3 key bytes
 	f.Write([]byte("x"))
 	f.Close()
 
-	db, err := Open(f.Name())
+	db, err := Open(dir)
 	if err != nil {
 		t.Fatalf("open on partial-key: %v", err)
 	}
-	defer db.Close()
-	if len(db.index) != 0 {
-		t.Errorf("expected no entries, got index %v", db.index)
+	if len(db.LastSegment().index) != 0 {
+		t.Errorf("expected no entries, got index %v", db.LastSegment().index)
 	}
 }
 
 func TestTruncatedValue(t *testing.T) {
+	dir, db := SetupTempDb(t)
+
 	// write one good record, then header+full key, but only 1 of 2 value bytes
-	f, _ := os.CreateTemp("", "kv")
-	defer os.Remove(f.Name())
+	f, _ := os.Create(filepath.Join(dir, "kv"))
 	// good record: keyLen=1,valLen=1,"k","v"
 	f.Write([]byte{1, 0, 0, 0, 1, 0, 0, 0, 'k', 'v'})
 	// next header: keyLen=2,valLen=2
@@ -168,11 +169,10 @@ func TestTruncatedValue(t *testing.T) {
 	f.Write([]byte("X"))
 	f.Close()
 
-	db, err := Open(f.Name())
+	db, err := Open(dir)
 	if err != nil {
 		t.Fatalf("open on partial-value: %v", err)
 	}
-	defer db.Close()
 
 	// only the first good record should be indexed
 	if val, err := db.Get("k"); err != nil || val != "v" {
@@ -184,7 +184,7 @@ func TestTruncatedValue(t *testing.T) {
 }
 
 func TestOverwriteAfterPartialAppend(t *testing.T) {
-	path, db := SetupTempDb(t)
+	dir, db := SetupTempDb(t)
 
 	// 1) Write two good records: “a”→“1”, “b”→“2”
 	if err := db.Set("a", "1"); err != nil {
@@ -195,11 +195,11 @@ func TestOverwriteAfterPartialAppend(t *testing.T) {
 	}
 
 	// Capture the offset where “c” would go:
-	offC := db.offset
+	offC := db.LastSegment().size
 
 	// 2) Simulate a crash *during* the third Set:
 	//    manually open the same file and write only half of the 8-byte header
-	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	f, err := os.OpenFile(db.LastSegment().path, os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatalf("open for corrupt: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestOverwriteAfterPartialAppend(t *testing.T) {
 	f.Close()
 
 	// 3) Re-open the DB (loadIndex will stop at offC, and db.offset will be set to offC)
-	db2, err := Open(f.Name())
+	db2, err := Open(dir)
 	if err != nil {
 		t.Fatalf("OpenDB after partial append: %v", err)
 	}

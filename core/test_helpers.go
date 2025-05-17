@@ -8,13 +8,11 @@ import (
 func SetupTempDb(tb testing.TB) (path string, db *DB) {
 	tb.Helper()
 
-	// make a temp filename
-	tmp, err := os.CreateTemp("", "kvdb_*_.db")
+	// make a temp dir
+	path, err := os.MkdirTemp("", "kvdb_test_*")
 	if err != nil {
 		tb.Fatalf("CreateTemp failed: %v", err)
 	}
-	path = tmp.Name()
-	tmp.Close()
 
 	// open the db
 	db, err = Open(path)

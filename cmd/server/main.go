@@ -13,13 +13,13 @@ import (
 
 func usage() {
 	fmt.Fprintf(os.Stderr, "usage:\n")
-	fmt.Fprintf(os.Stderr, "  server -db <db-path>\n")
+	fmt.Fprintf(os.Stderr, "  server -path <data-dir>\n")
 	os.Exit(1)
 }
 
 func main() {
 	var (
-		dbPath = flag.String("db", "", "path to data file")
+		dbPath = flag.String("path", "", "path to data directory")
 		addr   = flag.String("addr", ":1729", "RPC listen address")
 	)
 	flag.Parse()

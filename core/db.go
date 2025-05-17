@@ -7,20 +7,123 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"slices"
 )
 
+// SegmentSize is currently 1 KB
+const SegmentSize int64 = 1 * 1024
+
+// todo
+// 	now we will have multiple files. let's start calling them segment.
+//  each segment will be finished when it reaches the maximum allowed size.
+//  - only the last segment will have its writer. also the writer offset.
+//  - but each segment will have its file handle for reading.
+// 	- each segment will have its RAM index.
+
+//type DB struct {
+//	path   string           // path to the data file
+//	file   *os.File         // open file handle for reading records
+//	writer *bufio.Writer    // buffered writer for batching appends into file
+//	index  map[string]int64 // maps each key to its last-seen offset in the file
+//	offset int64            // next write position (in bytes) within the file
+//}
+
+type Segment struct {
+	path  string           // path to the segment file
+	file  *os.File         // open file handle for reading records
+	index map[string]int64 // maps each key to its last-seen offset in the segment
+	size  int64            // size of the segment file
+}
+
 type DB struct {
-	path   string
-	file   *os.File
-	writer *bufio.Writer
-	index  map[string]int64
-	offset int64
+	dir      string // data directory
+	segments []*Segment
+	writer   *bufio.Writer
 }
 
 var ErrKeyNotFound = errors.New("key not found")
 
-func Open(path string) (*DB, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
+func Open(dir string) (*DB, error) {
+	db := &DB{dir: dir}
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("mkdir %q: %w", dir, err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("readdir %q: %w", dir, err)
+	}
+
+	defer func() {
+		if err != nil {
+			// if we're erroring out, let's close all the opened files
+			for _, s := range db.segments {
+				s.file.Close()
+			}
+		}
+	}()
+
+	// load all segments
+	for _, e := range entries {
+		path := filepath.Join(dir, e.Name())
+
+		seg, err := loadSegment(path)
+		if err != nil {
+			return nil, fmt.Errorf("loadsegment %q: %w", path, err)
+		}
+
+		db.addSegment(seg)
+	}
+
+	// if last segment gets filled, what do we do?
+	// I think at that point(in the same thread), we create a new segment. Then return the result of set.
+	// This ensures that if there's a segment file, the last one is always an open writable segment.
+	// This way, we just check if a segment exists for initial creation.
+
+	// in case this is a new folder, we create the empty segment
+	if len(db.segments) == 0 {
+		// log.Println("No segment found, creating a new one...")
+		if err := db.createSegment(); err != nil {
+			return nil, fmt.Errorf("createsegment: %w", err)
+		}
+	}
+
+	return db, nil
+}
+
+func (db *DB) LastSegment() *Segment {
+	return db.segments[len(db.segments)-1]
+}
+
+// creates an empty segment and appends it to the segment list.
+// Changes the writer so new data is written to this segment.
+func (db *DB) createSegment() error {
+	path := filepath.Join(db.dir, fmt.Sprintf("seg%03d", len(db.segments)+1))
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("createsegment %q: %w", path, err)
+	}
+
+	// create an empty segment with the new file
+	seg := &Segment{path: path, file: f, index: make(map[string]int64), size: 0}
+	db.addSegment(seg)
+	return nil
+}
+
+// we add segments via this function because each segment addition
+// requires changing the writer too.
+func (db *DB) addSegment(seg *Segment) {
+	db.segments = append(db.segments, seg)
+	// in the current state, writer.flush is called on each Set call,
+	// so I'm not calling flush for the old writer
+	//db.writer.Flush()
+	db.writer = bufio.NewWriter(seg.file)
+}
+
+func loadSegment(path string) (*Segment, error) {
+	f, err := os.OpenFile(path, os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +137,7 @@ func Open(path string) (*DB, error) {
 	}
 
 	// in case where we have a corrupted record,
-	//we truncate to the last "good" offset
+	// we truncate to the last "good" offset
 	if err := f.Truncate(offset); err != nil {
 		return nil, err
 	}
@@ -44,9 +147,7 @@ func Open(path string) (*DB, error) {
 		return nil, err
 	}
 
-	w := bufio.NewWriter(f)
-
-	return &DB{file: f, writer: w, path: path, index: index, offset: offset}, nil
+	return &Segment{path: path, file: f, index: index, size: offset}, nil
 }
 
 func (db *DB) Close() error {
@@ -57,13 +158,20 @@ func (db *DB) Close() error {
 		return err
 	}
 
-	// block until the OS has flushed those pages to stable storage
-	if err := db.file.Sync(); err != nil {
-		return err
+	// close all segments
+	for _, s := range db.segments {
+		// block until the OS has flushed those pages to stable storage
+		if err := s.file.Sync(); err != nil {
+			return err
+		}
+
+		// close the file
+		if err := s.file.Close(); err != nil {
+			return err
+		}
 	}
 
-	// close the file
-	return db.file.Close()
+	return nil
 }
 
 func loadIndex(reader *bufio.Reader, index map[string]int64) (int64, error) {
@@ -120,26 +228,68 @@ func loadIndex(reader *bufio.Reader, index map[string]int64) (int64, error) {
 	return offset, nil
 }
 
-func (db *DB) Get(key string) (string, error) {
+// Location keeps the address of a record in the multi-segment data layout
+type Location struct {
+	segIdx int
+	offset int64
+}
 
-	recordOffset, ok := db.index[key]
-	if !ok {
-		// if not on index, the key doesn't exist
+func (db *DB) Get(key string) (string, error) {
+	found := false
+	var loc Location
+
+	// we will check each segment's index for the key, starting from the last one
+	for i, s := range slices.Backward(db.segments) {
+		off, ok := s.index[key]
+		if ok {
+			found = true
+			loc = Location{segIdx: i, offset: off}
+			break
+		}
+	}
+
+	if !found {
+		// if not on any index, the key doesn't exist
 		return "", fmt.Errorf("%w: %q", ErrKeyNotFound, key)
 	}
 
-	val, err := db.readValueAt(recordOffset)
+	val, err := db.readValueAt(loc)
 	if err != nil {
 		// this is an unexpected error, because if key is on index,
 		// its corresponding value should exist on the disk file
-		return "", err
+		return "", fmt.Errorf("db.readValueAt Location%v: %w", loc, err)
 	}
 
 	return val, nil
 }
 
-func (db *DB) Set(key, val string) error {
+// readValueAt reads back a single record at offset `off` in two syscalls:
+//  1. ReadAt 8 bytes → header[0:4]==keyLen, header[4:8]==valLen
+//  2. ReadAt keyLen+valLen bytes → payload
+//
+// I'm okay with two syscalls, no need to optimize them
+// because they don't lead to two disk reads thanks to page cache
+func (db *DB) readValueAt(loc Location) (val string, err error) {
+	// Read both lengths at once
+	var hdr [8]byte
+	file := db.segments[loc.segIdx].file
+	if _, err = file.ReadAt(hdr[:], loc.offset); err != nil {
+		return "", err
+	}
+	keyLen := int(binary.LittleEndian.Uint32(hdr[0:4]))
+	valLen := int(binary.LittleEndian.Uint32(hdr[4:8]))
 
+	// Read key+val in one go
+	buf := make([]byte, valLen)
+	if _, err = file.ReadAt(buf, loc.offset+8+int64(keyLen)); err != nil {
+		return "", err
+	}
+
+	val = string(buf)
+	return val, nil
+}
+
+func (db *DB) Set(key, val string) error {
 	// TODO:
 	//  figure out why sometimes on ctrl+c it says file already closed
 
@@ -153,10 +303,18 @@ func (db *DB) Set(key, val string) error {
 	//  any data. let's introduce a group commit option that can be used with low latency
 	//  my guess is that it won't have a big impact in a high throughput scenario.
 
-	// write key-value with length-prefix
-	writeLen, err := writeKV(db.writer, key, val)
+	writeLen := int64(8 + len(key) + len(val))
 
-	if err != nil {
+	if db.LastSegment().size+writeLen >= SegmentSize {
+		// we will close the current segment and create a new segment here.
+		// Since I'm already flushing on every set, I can just re-assign the writer here.
+		if err := db.createSegment(); err != nil {
+			return err
+		}
+	}
+
+	// write key-value with length-prefix
+	if err := writeKV(db.writer, key, val); err != nil {
 		return err
 	}
 
@@ -173,40 +331,18 @@ func (db *DB) Set(key, val string) error {
 	// fsync is crazy, it costs like 5ms. We could only accept this
 	// in group commit scenario.
 
-	// add offset to index
+	// add current key's offset to index
+	// offset equals size since we're appending to the file
 	// if power is lost just before this line, no prob,
 	// index will be rebuilt anyway
-	db.index[key] = db.offset
+	ls := db.LastSegment()
+	ls.index[key] = ls.size
 
-	// move offset by the written byte count
-	db.offset += int64(writeLen)
+	// todo check why we need to keep file size. If I do flush, is it really needed?
+	// increase file size by the written byte count
+	ls.size += writeLen
 
-	return err
-}
-
-// readValueAt reads back a single record at offset `off` in two syscalls:
-//  1. ReadAt 8 bytes → header[0:4]==keyLen, header[4:8]==valLen
-//  2. ReadAt keyLen+valLen bytes → payload
-//
-// I'm okay with two syscalls, no need to optimize them
-// because they don't lead to two disk reads thanks to page cache
-func (db *DB) readValueAt(off int64) (val string, err error) {
-	// Read both lengths at once
-	var hdr [8]byte
-	if _, err = db.file.ReadAt(hdr[:], off); err != nil {
-		return "", err
-	}
-	keyLen := int(binary.LittleEndian.Uint32(hdr[0:4]))
-	valLen := int(binary.LittleEndian.Uint32(hdr[4:8]))
-
-	// Read key+val in one go
-	buf := make([]byte, valLen)
-	if _, err = db.file.ReadAt(buf, off+8+int64(keyLen)); err != nil {
-		return "", err
-	}
-
-	val = string(buf)
-	return val, nil
+	return nil
 }
 
 // writeKV now emits:
@@ -216,7 +352,7 @@ func (db *DB) readValueAt(off int64) (val string, err error) {
 //	[val bytes]                      ← one write
 //
 // returns the total length
-func writeKV(w *bufio.Writer, key, val string) (totalLen int, err error) {
+func writeKV(w *bufio.Writer, key, val string) (err error) {
 	// Build an 8-byte header on the stack
 	var hdr [8]byte
 	binary.LittleEndian.PutUint32(hdr[0:4], uint32(len(key)))
@@ -225,18 +361,17 @@ func writeKV(w *bufio.Writer, key, val string) (totalLen int, err error) {
 	// Write header
 	_, err = w.Write(hdr[:])
 	if err != nil {
-		return totalLen, err
+		return err
 	}
 
 	// Write key
 	_, err = w.WriteString(key)
 	if err != nil {
-		return totalLen, err
+		return err
 	}
 
 	// Write value
 	_, err = w.WriteString(val)
 
-	totalLen = 8 + len(key) + len(val)
-	return totalLen, err
+	return err
 }
