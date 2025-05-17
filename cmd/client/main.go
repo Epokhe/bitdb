@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	rpc2 "github.com/epokhe/lsm-tree/cmd/rpc"
+	"github.com/epokhe/lsm-tree/cmd/remote"
 	"net/rpc"
 	"os"
 )
@@ -35,7 +35,7 @@ func main() {
 		}
 		var val string
 
-		err = client.Call("DB.Get", &rpc2.GetArgs{Key: key}, &val)
+		err = client.Call("DB.Get", &remote.GetArgs{Key: key}, &val)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to get the key: %v\n", err)
 			os.Exit(1)
@@ -58,7 +58,7 @@ func main() {
 
 		var setReply struct{}
 
-		err = client.Call("DB.Set", &rpc2.SetArgs{Key: key, Val: val}, &setReply)
+		err = client.Call("DB.Set", &remote.SetArgs{Key: key, Val: val}, &setReply)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to set the key: %v\n", err)
 			os.Exit(1)

@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	rpc2 "github.com/epokhe/lsm-tree/cmd/rpc"
+	rpc2 "github.com/epokhe/lsm-tree/cmd/remote"
 	"github.com/epokhe/lsm-tree/core"
 	"net/rpc"
 	"testing"
