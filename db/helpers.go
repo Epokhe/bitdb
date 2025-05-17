@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func setupTempDb(tb testing.TB) (path string, db *DB) {
+func SetupTempDb(tb testing.TB) (path string, db *DB) {
 	tb.Helper()
 
 	// make a temp filename

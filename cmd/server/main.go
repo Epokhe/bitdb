@@ -35,7 +35,7 @@ func main() {
 
 	// startRPC opens the DB, registers it, listens & serves.
 	// Returns a cleanup func that closes the listener and DB.
-	listenAddr, cleanup, err := db.StartRPC(mainDb, *addr)
+	listenAddr, cleanup, err := StartRPC(mainDb, *addr)
 	if err != nil {
 		log.Fatalf("could not start RPC server: %v", err)
 	}

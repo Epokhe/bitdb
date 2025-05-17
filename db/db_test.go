@@ -10,7 +10,7 @@ import (
 )
 
 func TestSetAndGet(t *testing.T) {
-	_, db := setupTempDb(t)
+	_, db := SetupTempDb(t)
 
 	// set a key and retrieve it using new RPC-style signatures
 	setArgs := &SetArgs{Key: "foo", Val: "bar"}
@@ -28,7 +28,7 @@ func TestSetAndGet(t *testing.T) {
 }
 
 func TestOverwrite(t *testing.T) {
-	_, db := setupTempDb(t)
+	_, db := SetupTempDb(t)
 
 	// set a key twice
 	db.Set(&SetArgs{Key: "key", Val: "first"}, &struct{}{})
@@ -44,7 +44,7 @@ func TestOverwrite(t *testing.T) {
 }
 
 func TestKeyNotFound(t *testing.T) {
-	_, db := setupTempDb(t)
+	_, db := SetupTempDb(t)
 
 	var val string
 	if err := db.Get(&GetArgs{Key: "missing"}, &val); !errors.Is(err, ErrKeyNotFound) {
@@ -53,7 +53,7 @@ func TestKeyNotFound(t *testing.T) {
 }
 
 func TestPersistence(t *testing.T) {
-	path, db := setupTempDb(t)
+	path, db := SetupTempDb(t)
 
 	db.Set(&SetArgs{"a", "1"}, &struct{}{})
 	db.Set(&SetArgs{"b", "2"}, &struct{}{})
@@ -76,7 +76,7 @@ func TestPersistence(t *testing.T) {
 }
 
 func TestLoadIndexOverwrite(t *testing.T) {
-	path, db := setupTempDb(t)
+	path, db := SetupTempDb(t)
 
 	db.Set(&SetArgs{"foo", "first"}, &struct{}{})
 	db.Set(&SetArgs{"foo", "second"}, &struct{}{})
@@ -92,7 +92,7 @@ func TestLoadIndexOverwrite(t *testing.T) {
 }
 
 func TestEmptyDB(t *testing.T) {
-	_, db := setupTempDb(t)
+	_, db := SetupTempDb(t)
 
 	var v string
 	if err := db.Get(&GetArgs{"nope"}, &v); !errors.Is(err, ErrKeyNotFound) {
@@ -101,7 +101,7 @@ func TestEmptyDB(t *testing.T) {
 }
 
 func TestManyKeys(t *testing.T) {
-	_, db := setupTempDb(t)
+	_, db := SetupTempDb(t)
 
 	for i := 0; i < 1000; i++ {
 		k, v := fmt.Sprintf("k%03d", i), fmt.Sprintf("v%03d", i)
@@ -196,7 +196,7 @@ func TestTruncatedValue(t *testing.T) {
 }
 
 func TestOverwriteAfterPartialAppend(t *testing.T) {
-	path, db := setupTempDb(t)
+	path, db := SetupTempDb(t)
 
 	// 1) Write two good records: “a”→“1”, “b”→“2”
 	if err := db.Set(&SetArgs{"a", "1"}, &struct{}{}); err != nil {
