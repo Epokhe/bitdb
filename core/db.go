@@ -11,47 +11,32 @@ import (
 	"slices"
 )
 
-const DefaultSegmentSize int64 = 1 * 1024 * 1024
-
-// todo
-// 	now we will have multiple files. let's start calling them segment.
-//  each segment will be finished when it reaches the maximum allowed size.
-//  - only the last segment will have its writer. also the writer offset.
-//  - but each segment will have its file handle for reading.
-// 	- each segment will have its RAM index.
-
-//type DB struct {
-//	path   string           // path to the data file
-//	file   *os.File         // open file handle for reading records
-//	writer *bufio.Writer    // buffered writer for batching appends into file
-//	index  map[string]int64 // maps each key to its last-seen offset in the file
-//	offset int64            // next write position (in bytes) within the file
-//}
+const DefaultSegmentSizeMax int64 = 1 * 1024 * 1024
 
 type Segment struct {
 	path  string           // path to the segment file
 	file  *os.File         // open file handle for reading records
 	index map[string]int64 // maps each key to its last-seen offset in the segment
-	size  int64            // size of the segment file
+	size  int64            // size of the segment file in bytes
 }
 
 type DB struct {
-	dir         string // data directory
-	segments    []*Segment
-	writer      *bufio.Writer
-	segmentSize int64
+	dir            string        // data directory
+	segments       []*Segment    // all segments. last one is the active segment
+	writer         *bufio.Writer // buffered writer for the currently active segment
+	segmentSizeMax int64         // maximum size a segment can reach
 }
 
 var ErrKeyNotFound = errors.New("key not found")
 
-func WithSegmentSize(n int64) Option {
-	return func(db *DB) { db.segmentSize = n }
+func WithSegmentSizeMax(n int64) Option {
+	return func(db *DB) { db.segmentSizeMax = n }
 }
 
 type Option func(*DB)
 
 func Open(dir string, opts ...Option) (*DB, error) {
-	db := &DB{dir: dir, segmentSize: DefaultSegmentSize}
+	db := &DB{dir: dir, segmentSizeMax: DefaultSegmentSizeMax}
 
 	// apply options
 	for _, opt := range opts {
@@ -325,7 +310,7 @@ func (db *DB) Set(key, val string) error {
 
 	writeLen := int64(8 + len(key) + len(val))
 
-	if db.LastSegment().size+writeLen >= db.segmentSize {
+	if db.LastSegment().size+writeLen >= db.segmentSizeMax {
 		// we will close the current segment and create a new segment here.
 		// Since I'm already flushing on every set, I can just re-assign the writer here.
 		if err := db.createSegment(); err != nil {

@@ -239,18 +239,18 @@ func TestSegmentCount(t *testing.T) {
 	const (
 		keys         = 100                        // distinct keys
 		rounds       = 50                         // overwrite each key this many times
-		segSize      = 1 * 1024                   // 1 KiB, via WithSegmentSize
+		segSizeMax   = 1 * 1024                   // 1 KiB, via WithSegmentSizeMax
 		keyLen       = 5                          // len("k0000"…"k0099")
 		overhead     = 8                          // 4B keyLen prefix + 4B valLen prefix
 		valLen       = 1                          // we’ll always write "x"
 		writeLen     = overhead + keyLen + valLen // bytes per record
 		totalWrites  = keys * rounds
-		totalBytes   = writeLen * totalWrites               // overall bytes touched
-		expectedSegs = (totalBytes + segSize - 1) / segSize // `ceil`ed division
+		totalBytes   = writeLen * totalWrites                     // overall bytes touched
+		expectedSegs = (totalBytes + segSizeMax - 1) / segSizeMax // `ceil`ed division
 	)
 
 	// Open with a tiny segment threshold
-	_, db := SetupTempDb(t, WithSegmentSize(int64(segSize)))
+	_, db := SetupTempDb(t, WithSegmentSizeMax(int64(segSizeMax)))
 
 	// 1) Drive the writes
 	for r := 0; r < rounds; r++ {
@@ -270,8 +270,8 @@ func TestSegmentCount(t *testing.T) {
 	}
 
 	t.Logf(
-		"expectedSegments=%d, observedSegments=%d; totalBytes=%d, segSize=%d, on-disk size=%d",
-		expectedSegs, segs, totalBytes, segSize, size,
+		"expectedSegments=%d, observedSegments=%d; totalBytes=%d, segSizeMax=%d, on-disk size=%d",
+		expectedSegs, segs, totalBytes, segSizeMax, size,
 	)
 
 	// 3) Checks
