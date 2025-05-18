@@ -10,6 +10,10 @@ bench *ARGS:
 benchsingle NAME *ARGS:
     go test {{ARGS}} ./core/ -run='^$' -bench={{NAME}} -benchmem
 
+# Run profiler and serve the result on http
+profile NAME *ARGS:
+    go test {{ARGS}} ./core/ -run='^$' -bench={{NAME}} -cpuprofile cpu.out
+    go tool pprof -http=0.0.0.0:1730 ./core.test cpu.out
 
 # sync to remote
 sync:
