@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func SetupTempDb(tb testing.TB) (path string, db *DB) {
+func SetupTempDb(tb testing.TB, dbOpts ...Option) (path string, db *DB) {
 	tb.Helper()
 
 	// make a temp dir
@@ -15,7 +15,7 @@ func SetupTempDb(tb testing.TB) (path string, db *DB) {
 	}
 
 	// open the db
-	db, err = Open(path)
+	db, err = Open(path, dbOpts...)
 	if err != nil {
 		// if Open fails, clean up the file immediately
 		os.Remove(path)

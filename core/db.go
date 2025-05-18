@@ -11,8 +11,7 @@ import (
 	"slices"
 )
 
-// SegmentSize is currently 1 KB
-const SegmentSize int64 = 1 * 1024
+const DefaultSegmentSize int64 = 1 * 1024 * 1024
 
 // todo
 // 	now we will have multiple files. let's start calling them segment.
@@ -37,15 +36,27 @@ type Segment struct {
 }
 
 type DB struct {
-	dir      string // data directory
-	segments []*Segment
-	writer   *bufio.Writer
+	dir         string // data directory
+	segments    []*Segment
+	writer      *bufio.Writer
+	segmentSize int64
 }
 
 var ErrKeyNotFound = errors.New("key not found")
 
-func Open(dir string) (*DB, error) {
-	db := &DB{dir: dir}
+func WithSegmentSize(n int64) Option {
+	return func(db *DB) { db.segmentSize = n }
+}
+
+type Option func(*DB)
+
+func Open(dir string, opts ...Option) (*DB, error) {
+	db := &DB{dir: dir, segmentSize: DefaultSegmentSize}
+
+	// apply options
+	for _, opt := range opts {
+		opt(db)
+	}
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir %q: %w", dir, err)
@@ -234,23 +245,32 @@ type Location struct {
 	offset int64
 }
 
-func (db *DB) Get(key string) (string, error) {
+// search each segment for the key and if exists, return its Location
+func segmentSearch(db *DB, key string) (loc *Location, err error) {
 	found := false
-	var loc Location
 
 	// we will check each segment's index for the key, starting from the last one
 	for i, s := range slices.Backward(db.segments) {
 		off, ok := s.index[key]
 		if ok {
 			found = true
-			loc = Location{segIdx: i, offset: off}
+			loc = &Location{segIdx: i, offset: off}
 			break
 		}
 	}
 
-	if !found {
+	if found {
+		return loc, nil
+	} else {
 		// if not on any index, the key doesn't exist
-		return "", fmt.Errorf("%w: %q", ErrKeyNotFound, key)
+		return nil, fmt.Errorf("%w: %q", ErrKeyNotFound, key)
+	}
+}
+
+func (db *DB) Get(key string) (string, error) {
+	loc, err := segmentSearch(db, key)
+	if err != nil {
+		return "", err
 	}
 
 	val, err := db.readValueAt(loc)
@@ -269,7 +289,7 @@ func (db *DB) Get(key string) (string, error) {
 //
 // I'm okay with two syscalls, no need to optimize them
 // because they don't lead to two disk reads thanks to page cache
-func (db *DB) readValueAt(loc Location) (val string, err error) {
+func (db *DB) readValueAt(loc *Location) (val string, err error) {
 	// Read both lengths at once
 	var hdr [8]byte
 	file := db.segments[loc.segIdx].file
@@ -305,7 +325,7 @@ func (db *DB) Set(key, val string) error {
 
 	writeLen := int64(8 + len(key) + len(val))
 
-	if db.LastSegment().size+writeLen >= SegmentSize {
+	if db.LastSegment().size+writeLen >= db.segmentSize {
 		// we will close the current segment and create a new segment here.
 		// Since I'm already flushing on every set, I can just re-assign the writer here.
 		if err := db.createSegment(); err != nil {
@@ -374,4 +394,17 @@ func writeKV(w *bufio.Writer, key, val string) (err error) {
 	_, err = w.WriteString(val)
 
 	return err
+}
+
+// DiskSize returns the sum of all on-disk segment file sizes.
+func (db *DB) DiskSize() (int64, error) {
+	var total int64
+	for _, seg := range db.segments {
+		info, err := seg.file.Stat()
+		if err != nil {
+			return 0, fmt.Errorf("stat segment file: %w", err)
+		}
+		total += info.Size()
+	}
+	return total, nil
 }

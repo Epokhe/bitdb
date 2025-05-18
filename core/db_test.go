@@ -234,3 +234,51 @@ func TestOverwriteAfterPartialAppend(t *testing.T) {
 		t.Errorf("expected c→3 after overwrite, got %q", got)
 	}
 }
+
+func TestSegmentCount(t *testing.T) {
+	const (
+		keys         = 100                        // distinct keys
+		rounds       = 50                         // overwrite each key this many times
+		segSize      = 1 * 1024                   // 1 KiB, via WithSegmentSize
+		keyLen       = 5                          // len("k0000"…"k0099")
+		overhead     = 8                          // 4B keyLen prefix + 4B valLen prefix
+		valLen       = 1                          // we’ll always write "x"
+		writeLen     = overhead + keyLen + valLen // bytes per record
+		totalWrites  = keys * rounds
+		totalBytes   = writeLen * totalWrites               // overall bytes touched
+		expectedSegs = (totalBytes + segSize - 1) / segSize // `ceil`ed division
+	)
+
+	// Open with a tiny segment threshold
+	_, db := SetupTempDb(t, WithSegmentSize(int64(segSize)))
+
+	// 1) Drive the writes
+	for r := 0; r < rounds; r++ {
+		for k := 0; k < keys; k++ {
+			key := fmt.Sprintf("k%04d", k)
+			if err := db.Set(key, "x"); err != nil {
+				t.Fatalf("Set(%q): %v", key, err)
+			}
+		}
+	}
+
+	// 2) Observe on‐disk state
+	segs := len(db.segments)
+	size, err := db.DiskSize()
+	if err != nil {
+		t.Fatalf("DiskSize: %v", err)
+	}
+
+	t.Logf(
+		"expectedSegments=%d, observedSegments=%d; totalBytes=%d, segSize=%d, on-disk size=%d",
+		expectedSegs, segs, totalBytes, segSize, size,
+	)
+
+	// 3) Checks
+	if segs != expectedSegs {
+		t.Fatalf("segment count mismatch: expected %d, got %d", expectedSegs, segs)
+	}
+	if size < totalBytes {
+		t.Fatalf("disk size too small: expected ≥%d, got %d", totalBytes, size)
+	}
+}
