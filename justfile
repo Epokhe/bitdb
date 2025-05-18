@@ -4,9 +4,9 @@ test *ARGS:
 
 # run benchmarks
 bench *ARGS:
-    go test {{ARGS}} ./cmd/server -run='^$' -bench=Benchmark_RPC_ -benchmem
+    go test {{ARGS}} ./core/ -run='^$' -bench=Benchmark_RPC_ -benchmem
 
 # run single benchmark
 benchsingle NAME *ARGS:
-    go test {{ARGS}} ./cmd/server -run='^$' -bench={{NAME}} -benchmem
+    go test {{ARGS}} ./core/ -run='^$' -bench={{NAME}} -benchmem
 
