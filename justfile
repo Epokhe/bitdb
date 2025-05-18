@@ -10,3 +10,7 @@ bench *ARGS:
 benchsingle NAME *ARGS:
     go test {{ARGS}} ./core/ -run='^$' -bench={{NAME}} -benchmem
 
+
+# sync to remote
+sync:
+    rsync -avzh --exclude .git ../lsm-tree overseer:~/
