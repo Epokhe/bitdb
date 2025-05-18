@@ -2,11 +2,15 @@
 test *ARGS:
     go test {{ARGS}} ./core/
 
+# run a single test
+testsingle NAME *ARGS:
+    go test {{ARGS}} ./core/ -run '^{{NAME}}$'
+
 # run benchmarks
 bench *ARGS:
     go test {{ARGS}} ./core/ -run='^$' -bench=Benchmark_RPC_ -benchmem
 
-# run single benchmark
+# run a single benchmark
 benchsingle NAME *ARGS:
     go test {{ARGS}} ./core/ -run='^$' -bench={{NAME}} -benchmem
 
