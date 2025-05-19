@@ -18,14 +18,14 @@ func SetupTempDb(tb testing.TB, dbOpts ...Option) (path string, db *DB) {
 	db, err = Open(path, dbOpts...)
 	if err != nil {
 		// if Open fails, clean up the file immediately
-		os.Remove(path)
+		os.RemoveAll(path)
 		tb.Fatalf("Open(%q) failed: %v", path, err)
 	}
 
 	// On cleanup, close DB then delete file
 	tb.Cleanup(func() {
 		db.Close()
-		os.Remove(path)
+		os.RemoveAll(path)
 	})
 
 	return path, db

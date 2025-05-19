@@ -38,3 +38,16 @@ func Benchmark_Set(b *testing.B) {
 		}
 	}
 }
+
+func Benchmark_Fsync_Set(b *testing.B) {
+	_, db := SetupTempDb(b, WithFsync(true))
+
+	// Run the timed loop of b.N Set calls
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		key := fmt.Sprintf("k%04d", i%10000)
+		if err := db.Set(key, "value"); err != nil {
+			b.Fatalf("db.set: %v", err)
+		}
+	}
+}

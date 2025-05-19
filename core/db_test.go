@@ -237,12 +237,12 @@ func TestOverwriteAfterPartialAppend(t *testing.T) {
 
 func TestSegmentCount(t *testing.T) {
 	const (
-		keys         = 100                        // distinct keys
-		rounds       = 50                         // overwrite each key this many times
-		segSizeMax   = 1 * 1024                   // 1 KiB, via WithSegmentSizeMax
-		keyLen       = 5                          // len("k0000"…"k0099")
+		keys         = 10
+		rounds       = 5 // overwrite each key this many times
+		segSizeMax   = 1 * 32
+		keyLen       = 5
 		overhead     = 8                          // 4B keyLen prefix + 4B valLen prefix
-		valLen       = 1                          // we’ll always write "x"
+		valLen       = 3                          // choosing this deliberately to make writeLen a factor of segSizeMax
 		writeLen     = overhead + keyLen + valLen // bytes per record
 		totalWrites  = keys * rounds
 		totalBytes   = writeLen * totalWrites                     // overall bytes touched
@@ -256,7 +256,7 @@ func TestSegmentCount(t *testing.T) {
 	for r := 0; r < rounds; r++ {
 		for k := 0; k < keys; k++ {
 			key := fmt.Sprintf("k%04d", k)
-			if err := db.Set(key, "x"); err != nil {
+			if err := db.Set(key, "xxx"); err != nil {
 				t.Fatalf("Set(%q): %v", key, err)
 			}
 		}

@@ -25,6 +25,7 @@ type DB struct {
 	segments       []*Segment    // all segments. last one is the active segment
 	writer         *bufio.Writer // buffered writer for the currently active segment
 	segmentSizeMax int64         // maximum size a segment can reach
+	fsync          bool          // whether to fsync on each Set call
 }
 
 var ErrKeyNotFound = errors.New("key not found")
@@ -33,10 +34,14 @@ func WithSegmentSizeMax(n int64) Option {
 	return func(db *DB) { db.segmentSizeMax = n }
 }
 
+func WithFsync(b bool) Option {
+	return func(db *DB) { db.fsync = b }
+}
+
 type Option func(*DB)
 
 func Open(dir string, opts ...Option) (*DB, error) {
-	db := &DB{dir: dir, segmentSizeMax: DefaultSegmentSizeMax}
+	db := &DB{dir: dir, segmentSizeMax: DefaultSegmentSizeMax, fsync: false}
 
 	// apply options
 	for _, opt := range opts {
@@ -139,7 +144,7 @@ func loadSegment(path string) (*Segment, error) {
 	}
 
 	// Go to the "new" end of the file in case it's truncated
-	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+	if _, err := f.Seek(0, io.SeekEnd); err != nil {
 		return nil, err
 	}
 
@@ -295,22 +300,9 @@ func (db *DB) readValueAt(loc *Location) (val string, err error) {
 }
 
 func (db *DB) Set(key, val string) error {
-	// TODO:
-	//  figure out why sometimes on ctrl+c it says file already closed
-
-	// TODO:
-	//  buffered writer doesn't flush until its buffer gets full.
-	//  this means an indefinite wait until the process exits.
-	//  we could have a ticker that periodically triggers a flush
-
-	// TODO:
-	//  we don't want to fsync at every write, but we also don't wanna lose
-	//  any data. let's introduce a group commit option that can be used with low latency
-	//  my guess is that it won't have a big impact in a high throughput scenario.
-
 	writeLen := int64(8 + len(key) + len(val))
 
-	if db.LastSegment().size+writeLen >= db.segmentSizeMax {
+	if db.LastSegment().size+writeLen > db.segmentSizeMax {
 		// we will close the current segment and create a new segment here.
 		// Since I'm already flushing on every set, I can just re-assign the writer here.
 		if err := db.createSegment(); err != nil {
@@ -324,17 +316,19 @@ func (db *DB) Set(key, val string) error {
 	}
 
 	// flush into the OS page cache so ReadAt will see it
-	// todo: this only guarantees read-after-write when no host failure happens
-	//  in the future versions I have to also fsync
-	//  but for that, I will do group commit
-	// this costs 4us on average(set takes 34us). It's very low cost actually.
+	// todo measure the cost
 	if err := db.writer.Flush(); err != nil {
 		return err
 	}
 
-	// I could use db.file.Sync() if I want fsync‐per‐write durability
-	// fsync is crazy, it costs like 5ms. We could only accept this
-	// in group commit scenario.
+	if db.fsync {
+		// I can use fsync if I want fsync‐per‐write durability
+		// fsync is crazy, it costs like 5ms. We could only accept this
+		// in group commit scenario.
+		if err := db.LastSegment().file.Sync(); err != nil {
+			return err
+		}
+	}
 
 	// add current key's offset to index
 	// offset equals size since we're appending to the file
