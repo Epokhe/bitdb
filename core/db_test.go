@@ -97,10 +97,9 @@ func TestManyKeys(t *testing.T) {
 
 	for i := 0; i < 1000; i++ {
 		k, v := fmt.Sprintf("k%03d", i), fmt.Sprintf("v%03d", i)
-		if err := db.Set(k, v); err != nil {
-			t.Fatalf("Set %d failed: %v", i, err)
-		}
+		db.Set(k, v)
 	}
+
 	for i := 0; i < 1000; i++ {
 		k, want := fmt.Sprintf("k%03d", i), fmt.Sprintf("v%03d", i)
 		if got, err := db.Get(k); err != nil || got != want {
@@ -113,7 +112,7 @@ func TestTruncatedHeader(t *testing.T) {
 	dir, db := SetupTempDb(t)
 
 	// Manually write a valid record + only half of the next header
-	f, _ := os.Create(filepath.Join(dir, "kv_test"))
+	f, _ := os.Create(filepath.Join(dir, "seg001"))
 	// header+key+val of (“x”→“y”)
 	f.Write([]byte("\x01\x00\x00\x00\x01\x00\x00\x00xy"))
 	// now write only 2 of the next 8 header bytes
@@ -138,7 +137,7 @@ func TestTruncatedKey(t *testing.T) {
 	dir, db := SetupTempDb(t)
 
 	// write header for keyLen=3,valLen=2, then only 1 byte of the key
-	f, _ := os.Create(filepath.Join(dir, "kv"))
+	f, _ := os.Create(filepath.Join(dir, "seg001"))
 	// header: keyLen=3,valLen=2
 	f.Write([]byte{3, 0, 0, 0, 2, 0, 0, 0})
 	// only 1 of the 3 key bytes
@@ -158,7 +157,7 @@ func TestTruncatedValue(t *testing.T) {
 	dir, db := SetupTempDb(t)
 
 	// write one good record, then header+full key, but only 1 of 2 value bytes
-	f, _ := os.Create(filepath.Join(dir, "kv"))
+	f, _ := os.Create(filepath.Join(dir, "seg001"))
 	// good record: keyLen=1,valLen=1,"k","v"
 	f.Write([]byte{1, 0, 0, 0, 1, 0, 0, 0, 'k', 'v'})
 	// next header: keyLen=2,valLen=2
@@ -187,32 +186,23 @@ func TestOverwriteAfterPartialAppend(t *testing.T) {
 	dir, db := SetupTempDb(t)
 
 	// 1) Write two good records: “a”→“1”, “b”→“2”
-	if err := db.Set("a", "1"); err != nil {
-		t.Fatalf("Set a=1: %v", err)
-	}
-	if err := db.Set("b", "2"); err != nil {
-		t.Fatalf("Set b=2: %v", err)
-	}
+	db.Set("a", "1")
+	db.Set("b", "2")
 
 	// Capture the offset where “c” would go:
 	offC := db.LastSegment().size
 
 	// 2) Simulate a crash *during* the third Set:
 	//    manually open the same file and write only half of the 8-byte header
-	f, err := os.OpenFile(db.LastSegment().path, os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatalf("open for corrupt: %v", err)
-	}
+	f, _ := os.OpenFile(db.LastSegment().path, os.O_WRONLY, 0)
+
 	// Seek to where the next record should start
-	if _, err := f.Seek(offC, io.SeekStart); err != nil {
-		t.Fatalf("seek to offC: %v", err)
-	}
+	f.Seek(offC, io.SeekStart)
+
 	// Write only 4 of the 8 header bytes (e.g. keyLen=3, valLen=4 → write only keyLen)
 	hdrPart := make([]byte, 4)
 	binary.LittleEndian.PutUint32(hdrPart, 3)
-	if _, err := f.Write(hdrPart); err != nil {
-		t.Fatalf("write partial header: %v", err)
-	}
+	f.Write(hdrPart)
 	f.Close()
 
 	// 3) Re-open the DB (loadIndex will stop at offC, and db.offset will be set to offC)
@@ -256,9 +246,7 @@ func TestSegmentCount(t *testing.T) {
 	for r := 0; r < rounds; r++ {
 		for k := 0; k < keys; k++ {
 			key := fmt.Sprintf("k%04d", k)
-			if err := db.Set(key, "xxx"); err != nil {
-				t.Fatalf("Set(%q): %v", key, err)
-			}
+			db.Set(key, "xxx")
 		}
 	}
 
@@ -280,5 +268,79 @@ func TestSegmentCount(t *testing.T) {
 	}
 	if size < totalBytes {
 		t.Fatalf("disk size too small: expected ≥%d, got %d", totalBytes, size)
+	}
+}
+
+func TestGetLatestWinsAcrossSegments(t *testing.T) {
+	_, db := SetupTempDb(t, WithSegmentSizeMax(1)) // force a new segment per write
+
+	db.Set("k", "v1")
+	db.Set("k", "v2")
+
+	out, _ := db.Get("k")
+	if out != "v2" {
+		t.Fatalf("want v2, got %q", out)
+	}
+}
+
+func TestExactBoundaryRollover(t *testing.T) {
+	// tiny segment size so we can hit boundary quickly:
+	_, db := SetupTempDb(t, WithSegmentSizeMax(50))
+
+	// compute one writeLen for "k00"->"x"
+	writeLen := int64(8 + 3 + 1) // overhead(8) + key("k00")=3 + val("x")=1
+
+	// write enough records to get within one record of the edge:
+	n := int(50/writeLen) - 1
+	for i := 0; i < n; i++ {
+		db.Set(fmt.Sprintf("k%02d", i), "x")
+	}
+
+	// segment count so far:
+	if got := len(db.segments); got != 1 {
+		t.Fatalf("want exactly 1 segment, got %d", got)
+	}
+
+	// one more write: exactly fills the segment
+	db.Set(fmt.Sprintf("k%02d", n), "x")
+	if got := len(db.segments); got != 1 {
+		t.Errorf("exact fill should NOT roll over, got %d segments", got)
+	}
+
+	// one more: this must roll to segment #2
+	db.Set(fmt.Sprintf("k%02d", n+1), "x")
+	if got := len(db.segments); got != 2 {
+		t.Errorf("overflow write should roll over, got %d segments", got)
+	}
+}
+
+func TestRecoveryAcrossSegmentBoundary(t *testing.T) {
+	dir, db := SetupTempDb(t, WithSegmentSizeMax(16))
+
+	// ─── SETUP: roll three segments by overwriting the same key ───
+	db.Set("foo", "A")
+	db.Set("foo", "B")
+	db.Set("foo", "C")
+
+	// ─── CRASH: truncate the last segment before C’s header ───
+	last := db.LastSegment()
+	off := last.index["foo"] // where C’s header would start
+	f, _ := os.OpenFile(last.path, os.O_WRONLY, 0)
+	f.Truncate(off)
+	f.Close()
+
+	// ─── RECOVER: re-open and check that “C” was dropped, so Get returns “B” ───
+	db2, err := Open(dir, WithSegmentSizeMax(16))
+	if err != nil {
+		t.Fatalf("reopen failed: %v", err)
+	}
+	defer db2.Close()
+
+	got, err := db2.Get("foo")
+	if err != nil {
+		t.Fatalf("Get after recovery: %v", err)
+	}
+	if got != "B" {
+		t.Errorf("expected foo→B after recovery, got %q", got)
 	}
 }

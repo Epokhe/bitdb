@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 )
 
 const DefaultSegmentSizeMax int64 = 1 * 1024 * 1024
@@ -68,6 +69,11 @@ func Open(dir string, opts ...Option) (*DB, error) {
 
 	// load all segments
 	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, "seg") {
+			continue
+		}
+
 		path := filepath.Join(dir, e.Name())
 
 		seg, err := loadSegment(path)
@@ -77,11 +83,6 @@ func Open(dir string, opts ...Option) (*DB, error) {
 
 		db.addSegment(seg)
 	}
-
-	// if last segment gets filled, what do we do?
-	// I think at that point(in the same thread), we create a new segment. Then return the result of set.
-	// This ensures that if there's a segment file, the last one is always an open writable segment.
-	// This way, we just check if a segment exists for initial creation.
 
 	// in case this is a new folder, we create the empty segment
 	if len(db.segments) == 0 {
@@ -267,7 +268,7 @@ func (db *DB) Get(key string) (string, error) {
 	if err != nil {
 		// this is an unexpected error, because if key is on index,
 		// its corresponding value should exist on the disk file
-		return "", fmt.Errorf("db.readValueAt Location%v: %w", loc, err)
+		return "", fmt.Errorf("db.readValueAt Location%+v: %w", loc, err)
 	}
 
 	return val, nil
