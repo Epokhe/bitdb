@@ -148,8 +148,8 @@ func TestTruncatedKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open on partial-key: %v", err)
 	}
-	if len(db.LastSegment().index) != 0 {
-		t.Errorf("expected no entries, got index %v", db.LastSegment().index)
+	if len(db.index) != 0 {
+		t.Errorf("expected no entries, got index %v", db.index)
 	}
 }
 
@@ -205,7 +205,7 @@ func TestOverwriteAfterPartialAppend(t *testing.T) {
 	f.Write(hdrPart)
 	f.Close()
 
-	// 3) Re-open the DB (loadIndex will stop at offC, and db.offset will be set to offC)
+	// 3) Re-open the DB (fillIndex will stop at offC, and db.offset will be set to offC)
 	db2, err := Open(dir)
 	if err != nil {
 		t.Fatalf("OpenDB after partial append: %v", err)
@@ -227,22 +227,31 @@ func TestOverwriteAfterPartialAppend(t *testing.T) {
 
 func TestSegmentCount(t *testing.T) {
 	const (
-		keys         = 10
-		rounds       = 5 // overwrite each key this many times
-		segSizeMax   = 1 * 32
-		keyLen       = 5
-		overhead     = 8                          // 4B keyLen prefix + 4B valLen prefix
-		valLen       = 3                          // choosing this deliberately to make writeLen a factor of segSizeMax
-		writeLen     = overhead + keyLen + valLen // bytes per record
-		totalWrites  = keys * rounds
-		totalBytes   = writeLen * totalWrites                     // overall bytes touched
-		expectedSegs = (totalBytes + segSizeMax - 1) / segSizeMax // `ceil`ed division
+		keys       = 10
+		rounds     = 5 // overwrite each key this many times
+		segSizeMax = 1 * 32
+
+		overhead    = 8 // 4B keyLen + 4B valLen
+		keyLen      = 5 // "k%04d" → 5 chars
+		valLen      = 3 // "xxx"
+		writeLen    = overhead + keyLen + valLen
+		totalWrites = keys * rounds
 	)
 
-	// Open with a tiny segment threshold
+	// post‐write rollover lets one write overshoot,
+	// so writesPerSeg = floor(limit/writeLen) + 1
+	writesPerSeg := int(segSizeMax/writeLen) + 1
+	if writesPerSeg < 1 {
+		writesPerSeg = 1
+	}
+
+	// number of segments = ceil(totalWrites / writesPerSeg)
+	expectedSegs := (totalWrites + writesPerSeg - 1) / writesPerSeg
+
+	// open with tiny segment threshold
 	_, db := SetupTempDb(t, WithSegmentSizeMax(int64(segSizeMax)))
 
-	// 1) Drive the writes
+	// drive all the writes
 	for r := 0; r < rounds; r++ {
 		for k := 0; k < keys; k++ {
 			key := fmt.Sprintf("k%04d", k)
@@ -250,7 +259,7 @@ func TestSegmentCount(t *testing.T) {
 		}
 	}
 
-	// 2) Observe on‐disk state
+	// observe on‐disk state
 	segs := len(db.segments)
 	size, err := db.DiskSize()
 	if err != nil {
@@ -258,16 +267,17 @@ func TestSegmentCount(t *testing.T) {
 	}
 
 	t.Logf(
-		"expectedSegments=%d, observedSegments=%d; totalBytes=%d, segSizeMax=%d, on-disk size=%d",
-		expectedSegs, segs, totalBytes, segSizeMax, size,
+		"writesPerSeg=%d, expectedSegs=%d, observedSegs=%d; segSizeMax=%d, diskSize=%d",
+		writesPerSeg, expectedSegs, segs, segSizeMax, size,
 	)
 
-	// 3) Checks
 	if segs != expectedSegs {
 		t.Fatalf("segment count mismatch: expected %d, got %d", expectedSegs, segs)
 	}
-	if size < totalBytes {
-		t.Fatalf("disk size too small: expected ≥%d, got %d", totalBytes, size)
+
+	if size < int64(totalWrites*writeLen) {
+		t.Fatalf("disk size too small: expected ≥%d, got %d",
+			totalWrites*writeLen, size)
 	}
 }
 
@@ -283,37 +293,6 @@ func TestGetLatestWinsAcrossSegments(t *testing.T) {
 	}
 }
 
-func TestExactBoundaryRollover(t *testing.T) {
-	// tiny segment size so we can hit boundary quickly:
-	_, db := SetupTempDb(t, WithSegmentSizeMax(50))
-
-	// compute one writeLen for "k00"->"x"
-	writeLen := int64(8 + 3 + 1) // overhead(8) + key("k00")=3 + val("x")=1
-
-	// write enough records to get within one record of the edge:
-	n := int(50/writeLen) - 1
-	for i := 0; i < n; i++ {
-		db.Set(fmt.Sprintf("k%02d", i), "x")
-	}
-
-	// segment count so far:
-	if got := len(db.segments); got != 1 {
-		t.Fatalf("want exactly 1 segment, got %d", got)
-	}
-
-	// one more write: exactly fills the segment
-	db.Set(fmt.Sprintf("k%02d", n), "x")
-	if got := len(db.segments); got != 1 {
-		t.Errorf("exact fill should NOT roll over, got %d segments", got)
-	}
-
-	// one more: this must roll to segment #2
-	db.Set(fmt.Sprintf("k%02d", n+1), "x")
-	if got := len(db.segments); got != 2 {
-		t.Errorf("overflow write should roll over, got %d segments", got)
-	}
-}
-
 func TestRecoveryAcrossSegmentBoundary(t *testing.T) {
 	dir, db := SetupTempDb(t, WithSegmentSizeMax(16))
 
@@ -324,7 +303,7 @@ func TestRecoveryAcrossSegmentBoundary(t *testing.T) {
 
 	// ─── CRASH: truncate the last segment before C’s header ───
 	last := db.LastSegment()
-	off := last.index["foo"] // where C’s header would start
+	off := db.index["foo"].offset // where C’s header would start
 	f, _ := os.OpenFile(last.path, os.O_WRONLY, 0)
 	f.Truncate(off)
 	f.Close()

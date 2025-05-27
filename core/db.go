@@ -8,25 +8,24 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 )
 
 const DefaultSegmentSizeMax int64 = 1 * 1024 * 1024
 
 type Segment struct {
-	path  string           // path to the segment file
-	file  *os.File         // open file handle for reading records
-	index map[string]int64 // maps each key to its last-seen offset in the segment
-	size  int64            // size of the segment file in bytes
+	path string   // path to the segment file
+	file *os.File // open file handle for reading records
+	size int64    // size of the segment file in bytes
 }
 
 type DB struct {
-	dir            string        // data directory
-	segments       []*Segment    // all segments. last one is the active segment
-	writer         *bufio.Writer // buffered writer for the currently active segment
-	segmentSizeMax int64         // maximum size a segment can reach
-	fsync          bool          // whether to fsync on each Set call
+	dir            string               // data directory
+	segments       []*Segment           // all segments. last one is the active segment
+	writer         *bufio.Writer        // buffered writer for the currently active segment
+	segmentSizeMax int64                // maximum size a segment can reach
+	fsync          bool                 // whether to fsync on each Set call
+	index          map[string]*Location // maps each key to its last-seen Location
 }
 
 var ErrKeyNotFound = errors.New("key not found")
@@ -42,7 +41,12 @@ func WithFsync(b bool) Option {
 type Option func(*DB)
 
 func Open(dir string, opts ...Option) (*DB, error) {
-	db := &DB{dir: dir, segmentSizeMax: DefaultSegmentSizeMax, fsync: false}
+	db := &DB{
+		dir:            dir,
+		segmentSizeMax: DefaultSegmentSizeMax,
+		fsync:          false,
+		index:          make(map[string]*Location),
+	}
 
 	// apply options
 	for _, opt := range opts {
@@ -76,7 +80,7 @@ func Open(dir string, opts ...Option) (*DB, error) {
 
 		path := filepath.Join(dir, e.Name())
 
-		seg, err := loadSegment(path)
+		seg, err := loadSegment(path, db)
 		if err != nil {
 			return nil, fmt.Errorf("loadsegment %q: %w", path, err)
 		}
@@ -109,7 +113,7 @@ func (db *DB) createSegment() error {
 	}
 
 	// create an empty segment with the new file
-	seg := &Segment{path: path, file: f, index: make(map[string]int64), size: 0}
+	seg := &Segment{path: path, file: f, size: 0}
 	db.addSegment(seg)
 	return nil
 }
@@ -124,19 +128,22 @@ func (db *DB) addSegment(seg *Segment) {
 	db.writer = bufio.NewWriter(seg.file)
 }
 
-func loadSegment(path string) (*Segment, error) {
+func loadSegment(path string, db *DB) (*Segment, error) {
 	f, err := os.OpenFile(path, os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, err
 	}
 
+	seg := Segment{path: path, file: f}
+
 	reader := bufio.NewReader(f)
-	index := make(map[string]int64)
-	offset, err := loadIndex(reader, index)
+	offset, err := fillIndex(reader, &seg, db.index)
 	if err != nil {
 		f.Close()
 		return nil, err
 	}
+
+	seg.size = offset
 
 	// in case where we have a corrupted record,
 	// we truncate to the last "good" offset
@@ -149,7 +156,7 @@ func loadSegment(path string) (*Segment, error) {
 		return nil, err
 	}
 
-	return &Segment{path: path, file: f, index: index, size: offset}, nil
+	return &seg, nil
 }
 
 func (db *DB) Close() error {
@@ -176,14 +183,15 @@ func (db *DB) Close() error {
 	return nil
 }
 
-func loadIndex(reader *bufio.Reader, index map[string]int64) (int64, error) {
+// fills the db index with the key locations from the current segment
+func fillIndex(reader *bufio.Reader, seg *Segment, index map[string]*Location) (int64, error) {
 	var offset int64 = 0
 
 	// header for key/value length prefixes
 	hdr := make([]byte, 8)
 
 	for {
-		// read the key length
+		// read the key/value length
 		if _, err := io.ReadFull(reader, hdr); err != nil {
 			// this is the happy path of exiting the loop
 			// we should never have EOF after this, that would mean partially
@@ -219,8 +227,11 @@ func loadIndex(reader *bufio.Reader, index map[string]int64) (int64, error) {
 			return 0, err
 		}
 
-		// record the offset for this key
-		index[key] = offset
+		// record the Location for this key
+		index[key] = &Location{
+			seg:    seg,
+			offset: offset,
+		}
 
 		// advance offset for next record
 		offset += int64(8 + keyLen + valLen)
@@ -232,36 +243,14 @@ func loadIndex(reader *bufio.Reader, index map[string]int64) (int64, error) {
 
 // Location keeps the address of a record in the multi-segment data layout
 type Location struct {
-	segIdx int
+	seg    *Segment
 	offset int64
 }
 
-// search each segment for the key and if exists, return its Location
-func segmentSearch(db *DB, key string) (loc *Location, err error) {
-	found := false
-
-	// we will check each segment's index for the key, starting from the last one
-	for i, s := range slices.Backward(db.segments) {
-		off, ok := s.index[key]
-		if ok {
-			found = true
-			loc = &Location{segIdx: i, offset: off}
-			break
-		}
-	}
-
-	if found {
-		return loc, nil
-	} else {
-		// if not on any index, the key doesn't exist
-		return nil, fmt.Errorf("%w: %q", ErrKeyNotFound, key)
-	}
-}
-
 func (db *DB) Get(key string) (string, error) {
-	loc, err := segmentSearch(db, key)
-	if err != nil {
-		return "", err
+	loc, ok := db.index[key]
+	if !ok {
+		return "", fmt.Errorf("%w: %q", ErrKeyNotFound, key)
 	}
 
 	val, err := db.readValueAt(loc)
@@ -274,7 +263,7 @@ func (db *DB) Get(key string) (string, error) {
 	return val, nil
 }
 
-// readValueAt reads back a single record at offset `off` in two syscalls:
+// readValueAt reads back a single record at offset in two syscalls:
 //  1. ReadAt 8 bytes → header[0:4]==keyLen, header[4:8]==valLen
 //  2. ReadAt keyLen+valLen bytes → payload
 //
@@ -283,7 +272,7 @@ func (db *DB) Get(key string) (string, error) {
 func (db *DB) readValueAt(loc *Location) (val string, err error) {
 	// Read both lengths at once
 	var hdr [8]byte
-	file := db.segments[loc.segIdx].file
+	file := loc.seg.file
 	if _, err = file.ReadAt(hdr[:], loc.offset); err != nil {
 		return "", err
 	}
@@ -301,14 +290,13 @@ func (db *DB) readValueAt(loc *Location) (val string, err error) {
 }
 
 func (db *DB) Set(key, val string) error {
-	writeLen := int64(8 + len(key) + len(val))
-
-	if db.LastSegment().size+writeLen > db.segmentSizeMax {
+	if db.LastSegment().size > db.segmentSizeMax {
 		// we will close the current segment and create a new segment here.
 		// Since I'm already flushing on every set, I can just re-assign the writer here.
 		if err := db.createSegment(); err != nil {
 			return err
 		}
+
 	}
 
 	// write key-value with length-prefix
@@ -331,16 +319,16 @@ func (db *DB) Set(key, val string) error {
 		}
 	}
 
-	// add current key's offset to index
+	// add current key's Location to index
 	// offset equals size since we're appending to the file
 	// if power is lost just before this line, no prob,
 	// index will be rebuilt anyway
 	ls := db.LastSegment()
-	ls.index[key] = ls.size
+	db.index[key] = &Location{seg: ls, offset: ls.size}
 
 	// todo check why we need to keep file size. If I do flush, is it really needed?
 	// increase file size by the written byte count
-	ls.size += writeLen
+	ls.size += int64(8 + len(key) + len(val)) // this calculation may be moved to writeKV
 
 	return nil
 }
