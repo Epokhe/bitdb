@@ -8,12 +8,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
+	"strconv"
 )
 
 const DefaultSegmentSizeMax int64 = 1 * 1024 * 1024
 
 type Segment struct {
+	id   int
 	path string   // path to the segment file
 	file *os.File // open file handle for reading records
 	size int64    // size of the segment file in bytes
@@ -26,6 +27,7 @@ type DB struct {
 	segmentSizeMax int64                // maximum size a segment can reach
 	fsync          bool                 // whether to fsync on each Set call
 	index          map[string]*Location // maps each key to its last-seen Location
+	manifest       *os.File             // open file handle for manifest
 }
 
 var ErrKeyNotFound = errors.New("key not found")
@@ -53,45 +55,48 @@ func Open(dir string, opts ...Option) (*DB, error) {
 		opt(db)
 	}
 
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("mkdir %q: %w", dir, err)
-	}
+	// err in this function should not be redeclared, if not
+	// the defer below will miss them
+	var err error
 
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, fmt.Errorf("readdir %q: %w", dir, err)
-	}
-
+	// if we're erroring out, run abort process
 	defer func() {
 		if err != nil {
-			// if we're erroring out, let's close all the opened files
-			for _, s := range db.segments {
-				s.file.Close()
-			}
+			db.AbortOnOpen()
 		}
 	}()
 
-	// load all segments
-	for _, e := range entries {
-		name := e.Name()
-		if !strings.HasPrefix(name, "seg") {
-			continue
-		}
+	if err = os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("mkdir %q: %w", dir, err)
+	}
 
-		path := filepath.Join(dir, e.Name())
+	db.manifest, err = ensureManifest(db.dir)
+	if err != nil {
+		return nil, fmt.Errorf("ensuremanifest: %w", err)
+	}
 
-		seg, err := loadSegment(path, db)
+	// load all segments according to manifest file
+	scanner := bufio.NewScanner(db.manifest)
+	for scanner.Scan() {
+		var segId int
+		segId, err = strconv.Atoi(scanner.Text())
 		if err != nil {
-			return nil, fmt.Errorf("loadsegment %q: %w", path, err)
+			return nil, fmt.Errorf("scan: %w", err)
 		}
 
-		db.addSegment(seg)
+		var seg *Segment
+		seg, err = loadSegment(segId, db)
+		if err != nil {
+			return nil, fmt.Errorf("loadsegment %q: %w", segId, err)
+		}
+
+		db.activateSegment(seg)
 	}
 
 	// in case this is a new folder, we create the empty segment
 	if len(db.segments) == 0 {
 		// log.Println("No segment found, creating a new one...")
-		if err := db.createSegment(); err != nil {
+		if err = db.createSegment(); err != nil {
 			return nil, fmt.Errorf("createsegment: %w", err)
 		}
 	}
@@ -103,24 +108,101 @@ func (db *DB) LastSegment() *Segment {
 	return db.segments[len(db.segments)-1]
 }
 
-// creates an empty segment and appends it to the segment list.
-// Changes the writer so new data is written to this segment.
-func (db *DB) createSegment() error {
-	path := filepath.Join(db.dir, fmt.Sprintf("seg%03d", len(db.segments)+1))
-	f, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("createsegment %q: %w", path, err)
+func ensureManifest(dir string) (*os.File, error) {
+	manifestPath := filepath.Join(dir, "MANIFEST")
+
+	_, err := os.Stat(manifestPath)
+	if err != nil && !os.IsNotExist(err) {
+		// Some other error trying to Stat
+		return nil, fmt.Errorf("stat manifest: %w", err)
 	}
 
-	// create an empty segment with the new file
-	seg := &Segment{path: path, file: f, size: 0}
-	db.addSegment(seg)
+	if os.IsNotExist(err) {
+		// No manifest, let's create it
+		mnf, err := os.OpenFile(manifestPath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o644)
+		if err != nil {
+			return nil, fmt.Errorf("create manifest: %w", err)
+		}
+
+		// fsync the file
+		if err := mnf.Sync(); err != nil {
+			return nil, fmt.Errorf("fsync new manifest: %w", err)
+		}
+
+		// Fsync the directory so that “the directory entry for MANIFEST”
+		// is also committed to disk
+		dfd, err := os.Open(dir)
+		if err != nil {
+			return nil, fmt.Errorf("open parent dir %q: %w", dir, err)
+		}
+
+		defer dfd.Close()
+
+		if err := dfd.Sync(); err != nil {
+			return nil, fmt.Errorf("fsync parent dir %q: %w", dir, err)
+		}
+
+		// Now manifest definitely exists on disk and survives a crash.
+		return mnf, nil
+	} else {
+		// manifest already exists, return it
+		mnf, err := os.OpenFile(manifestPath, os.O_RDWR|os.O_APPEND, 0o644)
+		if err != nil {
+			return nil, fmt.Errorf("open manifest: %w", err)
+		}
+		return mnf, nil
+	}
+}
+
+func (db *DB) appendToManifest(segId int) error {
+	// Write the new segment id
+	if _, err := fmt.Fprintf(db.manifest, "%d\n", segId); err != nil {
+		return fmt.Errorf("write to manifest: %w", err)
+	}
+
+	// Fsync to disk
+	if err := db.manifest.Sync(); err != nil {
+		return fmt.Errorf("fsync manifest: %w", err)
+	}
+
 	return nil
 }
 
-// we add segments via this function because each segment addition
-// requires changing the writer too.
-func (db *DB) addSegment(seg *Segment) {
+func getSegmentPath(dir string, id int) string {
+	return filepath.Join(dir, fmt.Sprintf("seg%03d", id))
+}
+
+func (db *DB) nextSegmentId() int {
+	if len(db.segments) == 0 {
+		return 1
+	} else {
+		return db.LastSegment().id + 1 // increment id
+	}
+}
+
+// creates an empty segment and appends it to the segment list.
+// Changes the writer so new data is written to this segment.
+func (db *DB) createSegment() error {
+	id := db.nextSegmentId()
+	path := getSegmentPath(db.dir, id)
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("createsegment %q: %w", id, err)
+	}
+
+	// create an empty segment with the new file
+	seg := &Segment{id: id, path: path, file: f, size: 0}
+	db.activateSegment(seg)
+	if err := db.appendToManifest(seg.id); err != nil {
+		return fmt.Errorf("appendtomanifest %q: %w", id, err)
+	}
+
+	return nil
+}
+
+// adds the segment to the list and activates it
+// by assigning a new writer for it
+func (db *DB) activateSegment(seg *Segment) {
 	db.segments = append(db.segments, seg)
 	// in the current state, writer.flush is called on each Set call,
 	// so I'm not calling flush for the old writer
@@ -128,13 +210,14 @@ func (db *DB) addSegment(seg *Segment) {
 	db.writer = bufio.NewWriter(seg.file)
 }
 
-func loadSegment(path string, db *DB) (*Segment, error) {
+func loadSegment(id int, db *DB) (*Segment, error) {
+	path := getSegmentPath(db.dir, id)
 	f, err := os.OpenFile(path, os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, err
 	}
 
-	seg := Segment{path: path, file: f}
+	seg := Segment{id: id, path: path, file: f}
 
 	reader := bufio.NewReader(f)
 	offset, err := fillIndex(reader, &seg, db.index)
@@ -160,13 +243,6 @@ func loadSegment(path string, db *DB) (*Segment, error) {
 }
 
 func (db *DB) Close() error {
-	// flush buffered bytes into the OS page cache
-	// yesss, on power loss we lose these
-	// ignored for now
-	if err := db.writer.Flush(); err != nil {
-		return err
-	}
-
 	// close all segments
 	for _, s := range db.segments {
 		// block until the OS has flushed those pages to stable storage
@@ -180,7 +256,25 @@ func (db *DB) Close() error {
 		}
 	}
 
+	// close the manifest
+	db.manifest.Close()
+
 	return nil
+}
+
+// AbortOnOpen In case a failure happens during Open,
+// we need to clean-up stuff opened so far. Keeping this
+// separate from Close, which ensures graceful shutdown.
+func (db *DB) AbortOnOpen() {
+	// close all segments which are opened so far
+	for _, s := range db.segments {
+		s.file.Close()
+	}
+
+	// close the manifest if it was opened
+	if db.manifest != nil {
+		db.manifest.Close()
+	}
 }
 
 // fills the db index with the key locations from the current segment
