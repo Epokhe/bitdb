@@ -36,7 +36,7 @@ func (remote *DBRemote) Set(args *SetArgs, _ *struct{}) error {
 	return nil
 }
 
-func StartRPC(db *core.DB, addr string) (listenAddr string, cleanup func(), err error) {
+func StartRPC(db *core.DB, addr string) (string, func(), error) {
 	// Create the rpc object
 	remote := &DBRemote{db: db}
 
@@ -44,14 +44,14 @@ func StartRPC(db *core.DB, addr string) (listenAddr string, cleanup func(), err 
 	server := rpc.NewServer()
 
 	if err := server.RegisterName("DB", remote); err != nil {
-		db.Close()
+		_ = db.Close()
 		return "", nil, err
 	}
 
 	// Listen on TCP
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		return "", nil, err
 	}
 
@@ -59,8 +59,8 @@ func StartRPC(db *core.DB, addr string) (listenAddr string, cleanup func(), err 
 	go server.Accept(listener)
 
 	// Return the actual address and a cleanup callback
-	cleanup = func() {
-		listener.Close() // stop accepting new conns
+	cleanup := func() {
+		_ = listener.Close() // stop accepting new conns
 
 		// flush & close file
 		if err := db.Close(); err != nil {

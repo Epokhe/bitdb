@@ -11,7 +11,7 @@ func Benchmark_Get(b *testing.B) {
 	// preload some keys so Get has something to fetch
 	for i := 0; i < 10000; i++ {
 		key := fmt.Sprintf("k%04d", i)
-		db.Set(key, "v")
+		_ = db.Set(key, "v")
 	}
 
 	b.ResetTimer()

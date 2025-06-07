@@ -32,3 +32,6 @@ profile NAME *ARGS:
 sync:
     rsync -avzh --exclude .git ../lsm-tree overseer:~/
 
+# lint with golangci-lint
+lint:
+    golangci-lint run ./...

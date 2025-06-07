@@ -222,7 +222,7 @@ func loadSegment(id int, db *DB) (*Segment, error) {
 	reader := bufio.NewReader(f)
 	offset, err := fillIndex(reader, &seg, db.index)
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 
@@ -257,7 +257,7 @@ func (db *DB) Close() error {
 	}
 
 	// close the manifest
-	db.manifest.Close()
+	_ = db.manifest.Close()
 
 	return nil
 }
@@ -268,12 +268,12 @@ func (db *DB) Close() error {
 func (db *DB) AbortOnOpen() {
 	// close all segments which are opened so far
 	for _, s := range db.segments {
-		s.file.Close()
+		_ = s.file.Close()
 	}
 
 	// close the manifest if it was opened
 	if db.manifest != nil {
-		db.manifest.Close()
+		_ = db.manifest.Close()
 	}
 }
 

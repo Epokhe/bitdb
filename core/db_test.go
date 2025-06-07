@@ -29,8 +29,8 @@ func TestOverwrite(t *testing.T) {
 	_, db := SetupTempDb(t)
 
 	// set a key twice
-	db.Set("key", "first")
-	db.Set("key", "second")
+	_ = db.Set("key", "first")
+	_ = db.Set("key", "second")
 
 	if val, err := db.Get("key"); err != nil {
 		t.Fatalf("Get returned error: %v", err)
@@ -50,16 +50,16 @@ func TestKeyNotFound(t *testing.T) {
 func TestPersistence(t *testing.T) {
 	path, db := SetupTempDb(t)
 
-	db.Set("a", "1")
-	db.Set("b", "2")
-	db.Close()
+	_ = db.Set("a", "1")
+	_ = db.Set("b", "2")
+	_ = db.Close()
 
 	// Re-open
 	db2, err := Open(path)
 	if err != nil {
 		t.Fatalf("reopen failed: %v", err)
 	}
-	defer db2.Close()
+	defer db2.Close() // nolint:errcheck
 
 	if val, err := db2.Get("a"); err != nil || val != "1" {
 		t.Errorf("expected a=1 after reopen, got %q, %v", val, err)
@@ -72,13 +72,13 @@ func TestPersistence(t *testing.T) {
 func TestLoadIndexOverwrite(t *testing.T) {
 	path, db := SetupTempDb(t)
 
-	db.Set("foo", "first")
-	db.Set("foo", "second")
-	db.Close()
+	_ = db.Set("foo", "first")
+	_ = db.Set("foo", "second")
+	_ = db.Close()
 
 	// Now reopen and Get should return “second”
 	db2, _ := Open(path)
-	defer db2.Close()
+	defer db2.Close() // nolint:errcheck
 	if val, err := db2.Get("foo"); err != nil || val != "second" {
 		t.Errorf("wanted final ‘second’, got %q", val)
 	}
@@ -97,7 +97,7 @@ func TestManyKeys(t *testing.T) {
 
 	for i := 0; i < 1000; i++ {
 		k, v := fmt.Sprintf("k%03d", i), fmt.Sprintf("v%03d", i)
-		db.Set(k, v)
+		_ = db.Set(k, v)
 	}
 
 	for i := 0; i < 1000; i++ {
@@ -109,15 +109,15 @@ func TestManyKeys(t *testing.T) {
 }
 
 func TestTruncatedHeader(t *testing.T) {
-	dir, db := SetupTempDb(t)
+	dir, _ := SetupTempDb(t)
 
 	// Manually write a valid record + only half of the next header
 	f, _ := os.Create(filepath.Join(dir, "seg001"))
 	// header+key+val of (“x”→“y”)
-	f.Write([]byte("\x01\x00\x00\x00\x01\x00\x00\x00xy"))
+	_, _ = f.Write([]byte("\x01\x00\x00\x00\x01\x00\x00\x00xy"))
 	// now write only 2 of the next 8 header bytes
-	f.Write([]byte{0x02, 0x00})
-	f.Close()
+	_, _ = f.Write([]byte{0x02, 0x00})
+	_ = f.Close()
 
 	// Open should succeed, index should only contain “x”
 	db, err := Open(dir)
@@ -134,15 +134,15 @@ func TestTruncatedHeader(t *testing.T) {
 }
 
 func TestTruncatedKey(t *testing.T) {
-	dir, db := SetupTempDb(t)
+	dir, _ := SetupTempDb(t)
 
 	// write header for keyLen=3,valLen=2, then only 1 byte of the key
 	f, _ := os.Create(filepath.Join(dir, "seg001"))
 	// header: keyLen=3,valLen=2
-	f.Write([]byte{3, 0, 0, 0, 2, 0, 0, 0})
+	_, _ = f.Write([]byte{3, 0, 0, 0, 2, 0, 0, 0})
 	// only 1 of the 3 key bytes
-	f.Write([]byte("x"))
-	f.Close()
+	_, _ = f.Write([]byte("x"))
+	_ = f.Close()
 
 	db, err := Open(dir)
 	if err != nil {
@@ -154,19 +154,19 @@ func TestTruncatedKey(t *testing.T) {
 }
 
 func TestTruncatedValue(t *testing.T) {
-	dir, db := SetupTempDb(t)
+	dir, _ := SetupTempDb(t)
 
 	// write one good record, then header+full key, but only 1 of 2 value bytes
 	f, _ := os.Create(filepath.Join(dir, "seg001"))
 	// good record: keyLen=1,valLen=1,"k","v"
-	f.Write([]byte{1, 0, 0, 0, 1, 0, 0, 0, 'k', 'v'})
+	_, _ = f.Write([]byte{1, 0, 0, 0, 1, 0, 0, 0, 'k', 'v'})
 	// next header: keyLen=2,valLen=2
-	f.Write([]byte{2, 0, 0, 0, 2, 0, 0, 0})
+	_, _ = f.Write([]byte{2, 0, 0, 0, 2, 0, 0, 0})
 	// write full key "hi"
-	f.Write([]byte("hi"))
+	_, _ = f.Write([]byte("hi"))
 	// only 1 of 2 value bytes
-	f.Write([]byte("X"))
-	f.Close()
+	_, _ = f.Write([]byte("X"))
+	_ = f.Close()
 
 	db, err := Open(dir)
 	if err != nil {
@@ -186,8 +186,8 @@ func TestOverwriteAfterPartialAppend(t *testing.T) {
 	dir, db := SetupTempDb(t)
 
 	// 1) Write two good records: “a”→“1”, “b”→“2”
-	db.Set("a", "1")
-	db.Set("b", "2")
+	_ = db.Set("a", "1")
+	_ = db.Set("b", "2")
 
 	// Capture the offset where “c” would go:
 	offC := db.LastSegment().size
@@ -197,20 +197,20 @@ func TestOverwriteAfterPartialAppend(t *testing.T) {
 	f, _ := os.OpenFile(db.LastSegment().path, os.O_WRONLY, 0)
 
 	// Seek to where the next record should start
-	f.Seek(offC, io.SeekStart)
+	_, _ = f.Seek(offC, io.SeekStart)
 
 	// Write only 4 of the 8 header bytes (e.g. keyLen=3, valLen=4 → write only keyLen)
 	hdrPart := make([]byte, 4)
 	binary.LittleEndian.PutUint32(hdrPart, 3)
-	f.Write(hdrPart)
-	f.Close()
+	_, _ = f.Write(hdrPart)
+	_ = f.Close()
 
 	// 3) Re-open the DB (fillIndex will stop at offC, and db.offset will be set to offC)
 	db2, err := Open(dir)
 	if err != nil {
 		t.Fatalf("OpenDB after partial append: %v", err)
 	}
-	defer db2.Close()
+	defer db2.Close() // nolint:errcheck
 
 	// 4) Now do the real Set("c","3") — it *must* go at offC, overwriting the garbage.
 	if err := db2.Set("c", "3"); err != nil {
@@ -255,7 +255,7 @@ func TestSegmentCount(t *testing.T) {
 	for r := 0; r < rounds; r++ {
 		for k := 0; k < keys; k++ {
 			key := fmt.Sprintf("k%04d", k)
-			db.Set(key, "xxx")
+			_ = db.Set(key, "xxx")
 		}
 	}
 
@@ -284,8 +284,8 @@ func TestSegmentCount(t *testing.T) {
 func TestGetLatestWinsAcrossSegments(t *testing.T) {
 	_, db := SetupTempDb(t, WithSegmentSizeMax(1)) // force a new segment per write
 
-	db.Set("k", "v1")
-	db.Set("k", "v2")
+	_ = db.Set("k", "v1")
+	_ = db.Set("k", "v2")
 
 	out, _ := db.Get("k")
 	if out != "v2" {
@@ -300,20 +300,23 @@ func TestRecoveryAcrossSegmentBoundary(t *testing.T) {
 	db.Set("foo", "A")
 	db.Set("foo", "B")
 	db.Set("foo", "C")
+	_ = db.Set("foo", "A")
+	_ = db.Set("foo", "B")
+	_ = db.Set("foo", "C")
 
 	// ─── CRASH: truncate the last segment before C’s header ───
 	last := db.LastSegment()
 	off := db.index["foo"].offset // where C’s header would start
 	f, _ := os.OpenFile(last.path, os.O_WRONLY, 0)
-	f.Truncate(off)
-	f.Close()
+	_ = f.Truncate(off)
+	_ = f.Close()
 
 	// ─── RECOVER: re-open and check that “C” was dropped, so Get returns “B” ───
 	db2, err := Open(dir, WithSegmentSizeMax(16))
 	if err != nil {
 		t.Fatalf("reopen failed: %v", err)
 	}
-	defer db2.Close()
+	defer db2.Close() // nolint:errcheck
 
 	got, err := db2.Get("foo")
 	if err != nil {
