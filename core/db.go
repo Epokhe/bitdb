@@ -2,6 +2,7 @@ package core
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -55,8 +56,7 @@ func Open(dir string, opts ...Option) (*DB, error) {
 		opt(db)
 	}
 
-	// err in this function should not be redeclared, if not
-	// the defer below will miss them
+	// DO NOT SHADOW err so defer does not miss it
 	var err error
 
 	// if we're erroring out, run abort process
@@ -79,10 +79,7 @@ func Open(dir string, opts ...Option) (*DB, error) {
 	scanner := bufio.NewScanner(db.manifest)
 	for scanner.Scan() {
 		var segId int
-		segId, err = strconv.Atoi(scanner.Text())
-		if err != nil {
-			return nil, fmt.Errorf("scan: %w", err)
-		}
+		segId, _ = strconv.Atoi(scanner.Text())
 
 		var seg *Segment
 		seg, err = loadSegment(segId, db)
@@ -91,6 +88,10 @@ func Open(dir string, opts ...Option) (*DB, error) {
 		}
 
 		db.activateSegment(seg)
+	}
+
+	if err = scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan: %w", err)
 	}
 
 	// in case this is a new folder, we create the empty segment
@@ -119,34 +120,15 @@ func ensureManifest(dir string) (*os.File, error) {
 
 	if os.IsNotExist(err) {
 		// No manifest, let's create it
-		mnf, err := os.OpenFile(manifestPath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o644)
+		mnf, err := createFileDurable(dir, "MANIFEST")
 		if err != nil {
-			return nil, fmt.Errorf("create manifest: %w", err)
+			return nil, fmt.Errorf("create manifest: %q", err)
 		}
 
-		// fsync the file
-		if err := mnf.Sync(); err != nil {
-			return nil, fmt.Errorf("fsync new manifest: %w", err)
-		}
-
-		// Fsync the directory so that “the directory entry for MANIFEST”
-		// is also committed to disk
-		dfd, err := os.Open(dir)
-		if err != nil {
-			return nil, fmt.Errorf("open parent dir %q: %w", dir, err)
-		}
-
-		defer dfd.Close()
-
-		if err := dfd.Sync(); err != nil {
-			return nil, fmt.Errorf("fsync parent dir %q: %w", dir, err)
-		}
-
-		// Now manifest definitely exists on disk and survives a crash.
 		return mnf, nil
 	} else {
 		// manifest already exists, return it
-		mnf, err := os.OpenFile(manifestPath, os.O_RDWR|os.O_APPEND, 0o644)
+		mnf, err := os.OpenFile(manifestPath, os.O_RDWR, 0o644)
 		if err != nil {
 			return nil, fmt.Errorf("open manifest: %w", err)
 		}
@@ -154,15 +136,17 @@ func ensureManifest(dir string) (*os.File, error) {
 	}
 }
 
-func (db *DB) appendToManifest(segId int) error {
-	// Write the new segment id
-	if _, err := fmt.Fprintf(db.manifest, "%d\n", segId); err != nil {
-		return fmt.Errorf("write to manifest: %w", err)
+func (db *DB) overwriteManifest() error {
+	var buf bytes.Buffer
+
+	for _, seg := range db.segments {
+		fmt.Fprintf(&buf, "%d\n", seg.id)
 	}
 
-	// Fsync to disk
-	if err := db.manifest.Sync(); err != nil {
-		return fmt.Errorf("fsync manifest: %w", err)
+	if newf, err := writeFileAtomic(db.manifest, buf.Bytes()); err != nil {
+		return fmt.Errorf("writefileatomic: %w", err)
+	} else {
+		db.manifest = newf
 	}
 
 	return nil
@@ -193,8 +177,8 @@ func (db *DB) createSegment() error {
 	// create an empty segment with the new file
 	seg := &Segment{id: id, path: path, file: f, size: 0}
 	db.activateSegment(seg)
-	if err := db.appendToManifest(seg.id); err != nil {
-		return fmt.Errorf("appendtomanifest %q: %w", id, err)
+	if err := db.overwriteManifest(); err != nil {
+		return fmt.Errorf("overwriteManifest: %w", err)
 	}
 
 	return nil

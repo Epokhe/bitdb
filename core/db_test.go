@@ -297,9 +297,6 @@ func TestRecoveryAcrossSegmentBoundary(t *testing.T) {
 	dir, db := SetupTempDb(t, WithSegmentSizeMax(16))
 
 	// ─── SETUP: roll three segments by overwriting the same key ───
-	db.Set("foo", "A")
-	db.Set("foo", "B")
-	db.Set("foo", "C")
 	_ = db.Set("foo", "A")
 	_ = db.Set("foo", "B")
 	_ = db.Set("foo", "C")
@@ -324,5 +321,91 @@ func TestRecoveryAcrossSegmentBoundary(t *testing.T) {
 	}
 	if got != "B" {
 		t.Errorf("expected foo→B after recovery, got %q", got)
+	}
+}
+
+// TestManifestOrderingAffectsWinner rewrites the MANIFEST lines so the older
+// segment is replayed *after* the newer one and verifies that the DB returns
+// the value from the segment that appears last in the file, regardless of its
+// numeric id.
+func TestManifestOrderingAffectsWinner(t *testing.T) {
+	dir, db := SetupTempDb(t, WithSegmentSizeMax(1)) // force 1 key per segment
+
+	_ = db.Set("k", "old") // seg001
+	_ = db.Set("k", "new") // seg002 (last‑writer‑wins originally)
+	_ = db.Close()
+
+	// Rewrite MANIFEST: list seg002 first, seg001 second
+	manPath := filepath.Join(dir, "MANIFEST")
+	if err := os.WriteFile(manPath, []byte("2\n1\n"), 0o644); err != nil {
+		t.Fatalf("rewrite manifest: %v", err)
+	}
+
+	reopened, err := Open(dir, WithSegmentSizeMax(db.segmentSizeMax))
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close() // nolint:errcheck
+
+	if got, _ := reopened.Get("k"); got != "old" {
+		t.Fatalf("want 'old' (manifest order 2→1), got %q", got)
+	}
+}
+
+// TestEmptyTailSegmentReuse simulates a crash right after MANIFEST was updated
+// with a new id but before any bytes were written to that file.  On reopen the
+// DB should reuse the zero‑byte file as its active writer.
+func TestEmptyTailSegmentReuse(t *testing.T) {
+	dir, db := SetupTempDb(t)
+	_ = db.Set("a", "1") // seg001 with data
+
+	// Force‑create an empty seg002 and *do not* write to it.
+	if err := db.createSegment(); err != nil {
+		t.Fatalf("createSegment: %v", err)
+	}
+	empty := db.LastSegment().path
+	_ = db.Close()
+
+	db2, err := Open(dir, WithSegmentSizeMax(db.segmentSizeMax))
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer db2.Close() // nolint:errcheck
+
+	if err := db2.Set("b", "2"); err != nil {
+		t.Fatalf("set after reopen: %v", err)
+	}
+
+	info, _ := os.Stat(empty)
+	if info.Size() == 0 {
+		t.Fatalf("expected %s to be reused and non‑empty", empty)
+	}
+}
+
+// TestNextFileNumberSkipsGaps ensures new segment ids always exceed the max
+// id seen in existing segments, even when MANIFEST ids skip numbers.
+func TestNextFileNumberSkipsGaps(t *testing.T) {
+	dir := t.TempDir()
+
+	// Pre-seed seg005 and seg009, and MANIFEST listing both
+	for _, id := range []int{5, 9} {
+		name := fmt.Sprintf("seg%03d", id)
+		_ = os.WriteFile(filepath.Join(dir, name), nil, 0o644)
+	}
+	_ = os.WriteFile(filepath.Join(dir, "MANIFEST"), []byte("5\n9\n"), 0o644)
+
+	db, err := Open(dir, WithSegmentSizeMax(1))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close() // nolint:errcheck
+
+	// Trigger creation of new segment via Set
+	_ = db.Set("k", "v")
+	_ = db.Set("k", "v") // second write should roll to new segment
+
+	lastID := db.LastSegment().id
+	if lastID <= 9 {
+		t.Fatalf("expected new id >9, got %d", lastID)
 	}
 }
