@@ -6,29 +6,24 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
+	"time"
 )
 
-const DefaultSegmentSizeMax int64 = 1 * 1024 * 1024
-
-type Segment struct {
-	id   int
-	path string   // path to the segment file
-	file *os.File // open file handle for reading records
-	size int64    // size of the segment file in bytes
-}
-
 type DB struct {
-	dir            string               // data directory
-	segments       []*Segment           // all segments. last one is the active segment
-	writer         *bufio.Writer        // buffered writer for the currently active segment
-	segmentSizeMax int64                // maximum size a segment can reach
-	fsync          bool                 // whether to fsync on each Set call
-	index          map[string]*Location // maps each key to its last-seen Location
-	manifest       *os.File             // open file handle for manifest
+	dir      string     // data directory
+	segments []*segment // all segments. last one is the active segment
+	//writer         *bufio.Writer              // buffered writer for the currently active segment
+	segmentSizeMax int64                      // maximum size a segment can reach
+	fsync          bool                       // whether to fsync on each Set call
+	sem            chan struct{}              // merge semaphore
+	mu             sync.Mutex                 // id counter mutex
+	idCtr          int                        // segment id counter, guarded by mu
+	index          map[string]*recordLocation // maps each key to its last-seen location
+	manifest       *os.File                   // open file handle for manifest
 }
 
 var ErrKeyNotFound = errors.New("key not found")
@@ -48,7 +43,8 @@ func Open(dir string, opts ...Option) (*DB, error) {
 		dir:            dir,
 		segmentSizeMax: DefaultSegmentSizeMax,
 		fsync:          false,
-		index:          make(map[string]*Location),
+		sem:            make(chan struct{}, 1),
+		index:          make(map[string]*recordLocation),
 	}
 
 	// apply options
@@ -76,23 +72,38 @@ func Open(dir string, opts ...Option) (*DB, error) {
 	}
 
 	// load all segments according to manifest file
+	var maxId int
 	scanner := bufio.NewScanner(db.manifest)
 	for scanner.Scan() {
 		var segId int
 		segId, _ = strconv.Atoi(scanner.Text())
 
-		var seg *Segment
-		seg, err = loadSegment(segId, db)
+		var seg *segment
+		var kOffs []keyOffset
+		seg, kOffs, err = parseSegment(db.dir, segId)
 		if err != nil {
 			return nil, fmt.Errorf("loadsegment %q: %w", segId, err)
 		}
 
+		// update db index with the returned offsets
+		for _, kOff := range kOffs {
+			db.index[kOff.key] = &recordLocation{seg: seg, offset: kOff.off}
+		}
+
 		db.activateSegment(seg)
+
+		// also, compute max segment id so we can set the counter
+		if segId > maxId {
+			maxId = segId
+		}
 	}
 
 	if err = scanner.Err(); err != nil {
 		return nil, fmt.Errorf("scan: %w", err)
 	}
+
+	// set the segment id counter
+	db.idCtr = maxId + 1
 
 	// in case this is a new folder, we create the empty segment
 	if len(db.segments) == 0 {
@@ -105,7 +116,8 @@ func Open(dir string, opts ...Option) (*DB, error) {
 	return db, nil
 }
 
-func (db *DB) LastSegment() *Segment {
+// todo remove this and add new segment info to createSegment function
+func (db *DB) activeSegment() *segment {
 	return db.segments[len(db.segments)-1]
 }
 
@@ -144,7 +156,7 @@ func (db *DB) overwriteManifest() error {
 	}
 
 	if newf, err := writeFileAtomic(db.manifest, buf.Bytes()); err != nil {
-		return fmt.Errorf("writefileatomic: %w", err)
+		return fmt.Errorf("atomic write manifest: %w", err)
 	} else {
 		db.manifest = newf
 	}
@@ -156,74 +168,35 @@ func getSegmentPath(dir string, id int) string {
 	return filepath.Join(dir, fmt.Sprintf("seg%03d", id))
 }
 
-func (db *DB) nextSegmentId() int {
-	if len(db.segments) == 0 {
-		return 1
-	} else {
-		return db.LastSegment().id + 1 // increment id
-	}
+func (db *DB) claimNextSegmentId() int {
+	db.mu.Lock()
+	nextId := db.idCtr
+	db.idCtr += 1
+	db.mu.Unlock()
+	return nextId
 }
 
 // creates an empty segment and appends it to the segment list.
 // Changes the writer so new data is written to this segment.
 func (db *DB) createSegment() error {
-	id := db.nextSegmentId()
-	path := getSegmentPath(db.dir, id)
-	f, err := os.Create(path)
+	id := db.claimNextSegmentId()
+
+	seg, err := newSegment(db.dir, id)
 	if err != nil {
-		return fmt.Errorf("createsegment %q: %w", id, err)
+		return fmt.Errorf("new segment %q: %w", id, err)
 	}
 
-	// create an empty segment with the new file
-	seg := &Segment{id: id, path: path, file: f, size: 0}
 	db.activateSegment(seg)
 	if err := db.overwriteManifest(); err != nil {
-		return fmt.Errorf("overwriteManifest: %w", err)
+		return fmt.Errorf("overwrite manifest: %w", err)
 	}
 
 	return nil
 }
 
-// adds the segment to the list and activates it
-// by assigning a new writer for it
-func (db *DB) activateSegment(seg *Segment) {
+// adds the segment to the list which activates it
+func (db *DB) activateSegment(seg *segment) {
 	db.segments = append(db.segments, seg)
-	// in the current state, writer.flush is called on each Set call,
-	// so I'm not calling flush for the old writer
-	//db.writer.Flush()
-	db.writer = bufio.NewWriter(seg.file)
-}
-
-func loadSegment(id int, db *DB) (*Segment, error) {
-	path := getSegmentPath(db.dir, id)
-	f, err := os.OpenFile(path, os.O_RDWR, 0o644)
-	if err != nil {
-		return nil, err
-	}
-
-	seg := Segment{id: id, path: path, file: f}
-
-	reader := bufio.NewReader(f)
-	offset, err := fillIndex(reader, &seg, db.index)
-	if err != nil {
-		_ = f.Close()
-		return nil, err
-	}
-
-	seg.size = offset
-
-	// in case where we have a corrupted record,
-	// we truncate to the last "good" offset
-	if err := f.Truncate(offset); err != nil {
-		return nil, err
-	}
-
-	// Go to the "new" end of the file in case it's truncated
-	if _, err := f.Seek(0, io.SeekEnd); err != nil {
-		return nil, err
-	}
-
-	return &seg, nil
 }
 
 func (db *DB) Close() error {
@@ -261,67 +234,9 @@ func (db *DB) AbortOnOpen() {
 	}
 }
 
-// fills the db index with the key locations from the current segment
-func fillIndex(reader *bufio.Reader, seg *Segment, index map[string]*Location) (int64, error) {
-	var offset int64 = 0
-
-	// header for key/value length prefixes
-	hdr := make([]byte, 8)
-
-	for {
-		// read the key/value length
-		if _, err := io.ReadFull(reader, hdr); err != nil {
-			// this is the happy path of exiting the loop
-			// we should never have EOF after this, that would mean partially
-			// written records i.e. corruption
-			if err == io.EOF || errors.Is(err, io.ErrUnexpectedEOF) {
-				break
-			}
-			return 0, err
-		}
-		keyLen := int(binary.LittleEndian.Uint32(hdr[0:4]))
-		valLen := int(binary.LittleEndian.Uint32(hdr[4:8]))
-
-		// read the key payload
-		keyBytes := make([]byte, keyLen)
-		if _, err := io.ReadFull(reader, keyBytes); err != nil {
-			// EOF here means partially written key i.e. corruption
-			// we bail out here, we're just ignoring the partially written key
-			if err == io.EOF || errors.Is(err, io.ErrUnexpectedEOF) {
-				break
-			}
-
-			return 0, err
-		}
-		key := string(keyBytes)
-
-		// skip value payload because we don't need it on the index
-		if _, err := io.CopyN(io.Discard, reader, int64(valLen)); err != nil {
-			// EOF here means partially written value i.e. corruption
-			// we bail out here, we're just ignoring the partially written value
-			if err == io.EOF || errors.Is(err, io.ErrUnexpectedEOF) {
-				break
-			}
-			return 0, err
-		}
-
-		// record the Location for this key
-		index[key] = &Location{
-			seg:    seg,
-			offset: offset,
-		}
-
-		// advance offset for next record
-		offset += int64(8 + keyLen + valLen)
-
-	}
-
-	return offset, nil
-}
-
-// Location keeps the address of a record in the multi-segment data layout
-type Location struct {
-	seg    *Segment
+// recordLocation keeps the address of a record in the multi-segment data layout
+type recordLocation struct {
+	seg    *segment
 	offset int64
 }
 
@@ -335,7 +250,7 @@ func (db *DB) Get(key string) (string, error) {
 	if err != nil {
 		// this is an unexpected error, because if key is on index,
 		// its corresponding value should exist on the disk file
-		return "", fmt.Errorf("db.readValueAt Location%+v: %w", loc, err)
+		return "", fmt.Errorf("db.readValueAt recordLocation%+v: %w", loc, err)
 	}
 
 	return val, nil
@@ -347,7 +262,7 @@ func (db *DB) Get(key string) (string, error) {
 //
 // I'm okay with two syscalls, no need to optimize them
 // because they don't lead to two disk reads thanks to page cache
-func (db *DB) readValueAt(loc *Location) (val string, err error) {
+func (db *DB) readValueAt(loc *recordLocation) (val string, err error) {
 	// Read both lengths at once
 	var hdr [8]byte
 	file := loc.seg.file
@@ -367,79 +282,58 @@ func (db *DB) readValueAt(loc *Location) (val string, err error) {
 	return val, nil
 }
 
+func (db *DB) tryMerge() {
+	select {
+	case db.sem <- struct{}{}:
+		go func() {
+			defer func() {
+				// release when done
+				<-db.sem
+			}()
+			fmt.Println("goroutine started")
+			time.Sleep(3 * time.Second)
+
+			if err := db.merge(); err != nil {
+				return err
+			}
+
+			fmt.Println("goroutine finished")
+		}()
+
+	default:
+		fmt.Println("already running sry")
+	}
+}
+
 func (db *DB) Set(key, val string) error {
-	if db.LastSegment().size > db.segmentSizeMax {
+	//db.tryMerge()
+	if db.activeSegment().size > db.segmentSizeMax {
 		// we will close the current segment and create a new segment here.
 		// Since I'm already flushing on every set, I can just re-assign the writer here.
 		if err := db.createSegment(); err != nil {
 			return err
 		}
 
-	}
+		if len(db.segments) > 100 { // this is for now, there will be a better way to decide later
 
-	// write key-value with length-prefix
-	if err := writeKV(db.writer, key, val); err != nil {
-		return err
-	}
-
-	// flush into the OS page cache so ReadAt will see it
-	// todo measure the cost
-	if err := db.writer.Flush(); err != nil {
-		return err
-	}
-
-	if db.fsync {
-		// I can use fsync if I want fsync‐per‐write durability
-		// fsync is crazy, it costs like 5ms. We could only accept this
-		// in group commit scenario.
-		if err := db.LastSegment().file.Sync(); err != nil {
-			return err
+			//db.tryMerge()
 		}
 	}
 
-	// add current key's Location to index
+	seg := db.activeSegment()
+
+	off, err := seg.write(key, val, db.fsync)
+	if err != nil {
+		return err
+	}
+
+	// add current key's location to index
 	// offset equals size since we're appending to the file
 	// if power is lost just before this line, no prob,
 	// index will be rebuilt anyway
-	ls := db.LastSegment()
-	db.index[key] = &Location{seg: ls, offset: ls.size}
-
-	// todo check why we need to keep file size. If I do flush, is it really needed?
-	// increase file size by the written byte count
-	ls.size += int64(8 + len(key) + len(val)) // this calculation may be moved to writeKV
+	db.index[key] = &recordLocation{seg: seg, offset: off}
 
 	return nil
-}
-
-// writeKV now emits:
-//
-//	[4-byte keyLen][4-byte valLen]  ← one 8-byte write
-//	[key bytes]                      ← one write
-//	[val bytes]                      ← one write
-//
-// returns the total length
-func writeKV(w *bufio.Writer, key, val string) (err error) {
-	// Build an 8-byte header on the stack
-	var hdr [8]byte
-	binary.LittleEndian.PutUint32(hdr[0:4], uint32(len(key)))
-	binary.LittleEndian.PutUint32(hdr[4:8], uint32(len(val)))
-
-	// Write header
-	_, err = w.Write(hdr[:])
-	if err != nil {
-		return err
-	}
-
-	// Write key
-	_, err = w.WriteString(key)
-	if err != nil {
-		return err
-	}
-
-	// Write value
-	_, err = w.WriteString(val)
-
-	return err
 }
 
 // DiskSize returns the sum of all on-disk segment file sizes.

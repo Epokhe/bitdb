@@ -190,11 +190,11 @@ func TestOverwriteAfterPartialAppend(t *testing.T) {
 	_ = db.Set("b", "2")
 
 	// Capture the offset where “c” would go:
-	offC := db.LastSegment().size
+	offC := db.activeSegment().size
 
 	// 2) Simulate a crash *during* the third Set:
 	//    manually open the same file and write only half of the 8-byte header
-	f, _ := os.OpenFile(db.LastSegment().path, os.O_WRONLY, 0)
+	f, _ := os.OpenFile(db.activeSegment().path, os.O_WRONLY, 0)
 
 	// Seek to where the next record should start
 	_, _ = f.Seek(offC, io.SeekStart)
@@ -205,7 +205,7 @@ func TestOverwriteAfterPartialAppend(t *testing.T) {
 	_, _ = f.Write(hdrPart)
 	_ = f.Close()
 
-	// 3) Re-open the DB (fillIndex will stop at offC, and db.offset will be set to offC)
+	// 3) Re-open the DB (scanSegment will stop at offC, and db.offset will be set to offC)
 	db2, err := Open(dir)
 	if err != nil {
 		t.Fatalf("OpenDB after partial append: %v", err)
@@ -302,7 +302,7 @@ func TestRecoveryAcrossSegmentBoundary(t *testing.T) {
 	_ = db.Set("foo", "C")
 
 	// ─── CRASH: truncate the last segment before C’s header ───
-	last := db.LastSegment()
+	last := db.activeSegment()
 	off := db.index["foo"].offset // where C’s header would start
 	f, _ := os.OpenFile(last.path, os.O_WRONLY, 0)
 	_ = f.Truncate(off)
@@ -363,7 +363,7 @@ func TestEmptyTailSegmentReuse(t *testing.T) {
 	if err := db.createSegment(); err != nil {
 		t.Fatalf("createSegment: %v", err)
 	}
-	empty := db.LastSegment().path
+	empty := db.activeSegment().path
 	_ = db.Close()
 
 	db2, err := Open(dir, WithSegmentSizeMax(db.segmentSizeMax))
@@ -404,7 +404,7 @@ func TestNextFileNumberSkipsGaps(t *testing.T) {
 	_ = db.Set("k", "v")
 	_ = db.Set("k", "v") // second write should roll to new segment
 
-	lastID := db.LastSegment().id
+	lastID := db.activeSegment().id
 	if lastID <= 9 {
 		t.Fatalf("expected new id >9, got %d", lastID)
 	}

@@ -30,6 +30,8 @@ func (remote *DBRemote) Get(args *GetArgs, reply *string) error {
 }
 
 func (remote *DBRemote) Set(args *SetArgs, _ *struct{}) error {
+	// todo handle errors correctly. we need to stop on errors
+	//  i think we're not stopping currently
 	if err := remote.db.Set(args.Key, args.Val); err != nil {
 		return err
 	}
