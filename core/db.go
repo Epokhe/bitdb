@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
-	"time"
 )
 
 type DB struct {
@@ -20,7 +19,9 @@ type DB struct {
 	segmentSizeMax int64                      // maximum size a segment can reach
 	fsync          bool                       // whether to fsync on each Set call
 	sem            chan struct{}              // merge semaphore
-	mu             sync.Mutex                 // id counter mutex
+	rw             sync.RWMutex               // guards segments & index
+	mu             sync.Mutex                 // guards id counter
+	mergeErr       chan error                 // async merge error reporting
 	idCtr          int                        // segment id counter, guarded by mu
 	index          map[string]*recordLocation // maps each key to its last-seen location
 	manifest       *os.File                   // open file handle for manifest
@@ -45,6 +46,7 @@ func Open(dir string, opts ...Option) (*DB, error) {
 		fsync:          false,
 		sem:            make(chan struct{}, 1),
 		index:          make(map[string]*recordLocation),
+		mergeErr:       make(chan error, 1),
 	}
 
 	// apply options
@@ -241,12 +243,15 @@ type recordLocation struct {
 }
 
 func (db *DB) Get(key string) (string, error) {
+	db.rw.RLock()
 	loc, ok := db.index[key]
 	if !ok {
+		db.rw.RUnlock()
 		return "", fmt.Errorf("%w: %q", ErrKeyNotFound, key)
 	}
 
 	val, err := db.readValueAt(loc)
+	db.rw.RUnlock()
 	if err != nil {
 		// this is an unexpected error, because if key is on index,
 		// its corresponding value should exist on the disk file
@@ -290,14 +295,15 @@ func (db *DB) tryMerge() {
 				// release when done
 				<-db.sem
 			}()
-			fmt.Println("goroutine started")
-			time.Sleep(3 * time.Second)
+			// fmt.Println("goroutine started")
+			// time.Sleep(3 * time.Second)
 
 			if err := db.merge(); err != nil {
-				return err
+				select {
+				case db.mergeErr <- err:
+				default:
+				}
 			}
-
-			fmt.Println("goroutine finished")
 		}()
 
 	default:
@@ -306,17 +312,17 @@ func (db *DB) tryMerge() {
 }
 
 func (db *DB) Set(key, val string) error {
-	//db.tryMerge()
+	db.rw.Lock()
+	defer db.rw.Unlock()
+
 	if db.activeSegment().size > db.segmentSizeMax {
 		// we will close the current segment and create a new segment here.
-		// Since I'm already flushing on every set, I can just re-assign the writer here.
 		if err := db.createSegment(); err != nil {
 			return err
 		}
 
 		if len(db.segments) > 100 { // this is for now, there will be a better way to decide later
-
-			//db.tryMerge()
+			db.tryMerge()
 		}
 	}
 
@@ -338,6 +344,9 @@ func (db *DB) Set(key, val string) error {
 
 // DiskSize returns the sum of all on-disk segment file sizes.
 func (db *DB) DiskSize() (int64, error) {
+	db.rw.RLock()
+	defer db.rw.RUnlock()
+
 	var total int64
 	for _, seg := range db.segments {
 		info, err := seg.file.Stat()
@@ -348,3 +357,9 @@ func (db *DB) DiskSize() (int64, error) {
 	}
 	return total, nil
 }
+
+// todo handle this correctly on server. Maybe subscribe to this, or maybe we should
+//  give a way for server to pass a callback to the db idk.
+// MergeErrors returns a read-only channel that delivers errors produced by
+// background merge jobs (if any). The channel is never closed.
+func (db *DB) MergeErrors() <-chan error { return db.mergeErr }

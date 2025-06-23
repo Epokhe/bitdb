@@ -27,7 +27,7 @@ func newSegment(dir string, id int) (*segment, error) {
 
 	w := bufio.NewWriter(f)
 
-	return &segment{id: id, file: f, writer: w}, nil
+	return &segment{id: id, file: f, writer: w, size: 0}, nil
 }
 
 type keyOffset struct {

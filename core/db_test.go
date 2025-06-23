@@ -76,11 +76,11 @@ func TestLoadIndexOverwrite(t *testing.T) {
 	_ = db.Set("foo", "second")
 	_ = db.Close()
 
-	// Now reopen and Get should return “second”
+	// Now reopen and Get should return "second"
 	db2, _ := Open(path)
 	defer db2.Close() // nolint:errcheck
 	if val, err := db2.Get("foo"); err != nil || val != "second" {
-		t.Errorf("wanted final ‘second’, got %q", val)
+		t.Errorf("wanted final 'second', got %q", val)
 	}
 }
 
@@ -113,13 +113,13 @@ func TestTruncatedHeader(t *testing.T) {
 
 	// Manually write a valid record + only half of the next header
 	f, _ := os.Create(filepath.Join(dir, "seg001"))
-	// header+key+val of (“x”→“y”)
+	// header+key+val of ("x"→"y")
 	_, _ = f.Write([]byte("\x01\x00\x00\x00\x01\x00\x00\x00xy"))
 	// now write only 2 of the next 8 header bytes
 	_, _ = f.Write([]byte{0x02, 0x00})
 	_ = f.Close()
 
-	// Open should succeed, index should only contain “x”
+	// Open should succeed, index should only contain "x"
 	db, err := Open(dir)
 	if err != nil {
 		t.Fatalf("Open on truncated header: %v", err)
@@ -185,16 +185,16 @@ func TestTruncatedValue(t *testing.T) {
 func TestOverwriteAfterPartialAppend(t *testing.T) {
 	dir, db := SetupTempDb(t)
 
-	// 1) Write two good records: “a”→“1”, “b”→“2”
+	// 1) Write two good records: "a"→"1", "b"→"2"
 	_ = db.Set("a", "1")
 	_ = db.Set("b", "2")
 
-	// Capture the offset where “c” would go:
+	// Capture the offset where "c" would go:
 	offC := db.activeSegment().size
 
 	// 2) Simulate a crash *during* the third Set:
 	//    manually open the same file and write only half of the 8-byte header
-	f, _ := os.OpenFile(db.activeSegment().path, os.O_WRONLY, 0)
+	f, _ := os.OpenFile(getSegmentPath(db.dir, db.activeSegment().id), os.O_WRONLY, 0)
 
 	// Seek to where the next record should start
 	_, _ = f.Seek(offC, io.SeekStart)
@@ -238,7 +238,7 @@ func TestSegmentCount(t *testing.T) {
 		totalWrites = keys * rounds
 	)
 
-	// post‐write rollover lets one write overshoot,
+	// post-write rollover lets one write overshoot,
 	// so writesPerSeg = floor(limit/writeLen) + 1
 	writesPerSeg := int(segSizeMax/writeLen) + 1
 	if writesPerSeg < 1 {
@@ -259,7 +259,7 @@ func TestSegmentCount(t *testing.T) {
 		}
 	}
 
-	// observe on‐disk state
+	// observe on-disk state
 	segs := len(db.segments)
 	size, err := db.DiskSize()
 	if err != nil {
@@ -301,14 +301,14 @@ func TestRecoveryAcrossSegmentBoundary(t *testing.T) {
 	_ = db.Set("foo", "B")
 	_ = db.Set("foo", "C")
 
-	// ─── CRASH: truncate the last segment before C’s header ───
+	// ─── CRASH: truncate the last segment before C's header ───
 	last := db.activeSegment()
-	off := db.index["foo"].offset // where C’s header would start
-	f, _ := os.OpenFile(last.path, os.O_WRONLY, 0)
+	off := db.index["foo"].offset // where C's header would start
+	f, _ := os.OpenFile(getSegmentPath(db.dir, last.id), os.O_WRONLY, 0)
 	_ = f.Truncate(off)
 	_ = f.Close()
 
-	// ─── RECOVER: re-open and check that “C” was dropped, so Get returns “B” ───
+	// ─── RECOVER: re-open and check that "C" was dropped, so Get returns "B" ───
 	db2, err := Open(dir, WithSegmentSizeMax(16))
 	if err != nil {
 		t.Fatalf("reopen failed: %v", err)
@@ -332,7 +332,7 @@ func TestManifestOrderingAffectsWinner(t *testing.T) {
 	dir, db := SetupTempDb(t, WithSegmentSizeMax(1)) // force 1 key per segment
 
 	_ = db.Set("k", "old") // seg001
-	_ = db.Set("k", "new") // seg002 (last‑writer‑wins originally)
+	_ = db.Set("k", "new") // seg002 (last-writer-wins originally)
 	_ = db.Close()
 
 	// Rewrite MANIFEST: list seg002 first, seg001 second
@@ -354,16 +354,16 @@ func TestManifestOrderingAffectsWinner(t *testing.T) {
 
 // TestEmptyTailSegmentReuse simulates a crash right after MANIFEST was updated
 // with a new id but before any bytes were written to that file.  On reopen the
-// DB should reuse the zero‑byte file as its active writer.
+// DB should reuse the zero-byte file as its active writer.
 func TestEmptyTailSegmentReuse(t *testing.T) {
 	dir, db := SetupTempDb(t)
 	_ = db.Set("a", "1") // seg001 with data
 
-	// Force‑create an empty seg002 and *do not* write to it.
+	// Force-create an empty seg002 and *do not* write to it.
 	if err := db.createSegment(); err != nil {
 		t.Fatalf("createSegment: %v", err)
 	}
-	empty := db.activeSegment().path
+	empty := getSegmentPath(db.dir, db.activeSegment().id)
 	_ = db.Close()
 
 	db2, err := Open(dir, WithSegmentSizeMax(db.segmentSizeMax))
@@ -378,7 +378,7 @@ func TestEmptyTailSegmentReuse(t *testing.T) {
 
 	info, _ := os.Stat(empty)
 	if info.Size() == 0 {
-		t.Fatalf("expected %s to be reused and non‑empty", empty)
+		t.Fatalf("expected %s to be reused and non-empty", empty)
 	}
 }
 

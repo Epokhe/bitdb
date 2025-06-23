@@ -2,7 +2,6 @@ package core
 
 import (
 	"fmt"
-	"os"
 )
 
 type mergeOutput struct {
@@ -18,15 +17,10 @@ func newMergeOutput() *mergeOutput {
 }
 
 func (db *DB) createMergeSegment() (*segment, error) {
-	id := db.claimNextSegmentId()
-	path := getSegmentPath(db.dir, id)
-	f, err := os.Create(path)
+	seg, err := newSegment(db.dir, db.claimNextSegmentId())
 	if err != nil {
-		return nil, fmt.Errorf("createmergesegment %q: %w", path, err)
+		return nil, fmt.Errorf("create merge segment %q: %w", seg.id, err)
 	}
-
-	// create an empty segment with the new file
-	seg := &segment{id: id, file: f, size: 0}
 
 	return seg, nil
 }
@@ -48,6 +42,10 @@ func (db *DB) rolloverSegment(out *mergeOutput) (*segment, error) {
 }
 
 func (db *DB) merge() error {
+	// Acquire exclusive lock for the whole merge. You can optimise later.
+	db.rw.Lock()
+	defer db.rw.Unlock()
+
 	// start with a new segment. processRecord will add more when needed
 	out := newMergeOutput()
 	mergeSeg, err := db.rolloverSegment(out)
@@ -73,7 +71,7 @@ func (db *DB) merge() error {
 
 			// skip if not latest
 			if !isLatest {
-				return nil
+				continue
 			}
 
 			// prepare new segment if we grew over the limit
