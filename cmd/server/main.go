@@ -45,7 +45,15 @@ func main() {
 	// Wait for SIGINT or SIGTERM
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+
+	mergeErrCh := db.MergeErrors()
+
+	select {
+	case sig := <-sigCh:
+		log.Printf("received %v", sig)
+	case err := <-mergeErrCh:
+		log.Printf("merge error: %v", err)
+	}
 
 	log.Println("Shutting down…")
 	cleanup()

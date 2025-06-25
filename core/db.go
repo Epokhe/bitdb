@@ -12,17 +12,17 @@ import (
 	"sync"
 )
 
+// todo go test -race
+
 type DB struct {
-	dir      string     // data directory
-	segments []*segment // all segments. last one is the active segment
-	//writer         *bufio.Writer              // buffered writer for the currently active segment
+	dir            string                     // data directory
+	segments       []*segment                 // all segments. last one is the active segment
 	segmentSizeMax int64                      // maximum size a segment can reach
 	fsync          bool                       // whether to fsync on each Set call
-	sem            chan struct{}              // merge semaphore
-	rw             sync.RWMutex               // guards segments & index
-	mu             sync.Mutex                 // guards id counter
+	mergeSem       chan struct{}              // merge semaphore
+	rw             sync.RWMutex               // guards segments & index & manifest & idCtr
 	mergeErr       chan error                 // async merge error reporting
-	idCtr          int                        // segment id counter, guarded by mu
+	idCtr          int                        // segment id counter
 	index          map[string]*recordLocation // maps each key to its last-seen location
 	manifest       *os.File                   // open file handle for manifest
 }
@@ -44,7 +44,7 @@ func Open(dir string, opts ...Option) (*DB, error) {
 		dir:            dir,
 		segmentSizeMax: DefaultSegmentSizeMax,
 		fsync:          false,
-		sem:            make(chan struct{}, 1),
+		mergeSem:       make(chan struct{}, 1),
 		index:          make(map[string]*recordLocation),
 		mergeErr:       make(chan error, 1),
 	}
@@ -81,18 +81,18 @@ func Open(dir string, opts ...Option) (*DB, error) {
 		segId, _ = strconv.Atoi(scanner.Text())
 
 		var seg *segment
-		var kOffs []keyOffset
-		seg, kOffs, err = parseSegment(db.dir, segId)
+		var keyOffs []keyOffset
+		seg, keyOffs, err = parseSegment(db.dir, segId)
 		if err != nil {
 			return nil, fmt.Errorf("loadsegment %q: %w", segId, err)
 		}
 
 		// update db index with the returned offsets
-		for _, kOff := range kOffs {
+		for _, kOff := range keyOffs {
 			db.index[kOff.key] = &recordLocation{seg: seg, offset: kOff.off}
 		}
 
-		db.activateSegment(seg)
+		db.segments = append(db.segments, seg)
 
 		// also, compute max segment id so we can set the counter
 		if segId > maxId {
@@ -110,17 +110,12 @@ func Open(dir string, opts ...Option) (*DB, error) {
 	// in case this is a new folder, we create the empty segment
 	if len(db.segments) == 0 {
 		// log.Println("No segment found, creating a new one...")
-		if err = db.createSegment(); err != nil {
+		if _, err = db.createSegment(); err != nil {
 			return nil, fmt.Errorf("createsegment: %w", err)
 		}
 	}
 
 	return db, nil
-}
-
-// todo remove this and add new segment info to createSegment function
-func (db *DB) activeSegment() *segment {
-	return db.segments[len(db.segments)-1]
 }
 
 func ensureManifest(dir string) (*os.File, error) {
@@ -171,37 +166,32 @@ func getSegmentPath(dir string, id int) string {
 }
 
 func (db *DB) claimNextSegmentId() int {
-	db.mu.Lock()
 	nextId := db.idCtr
 	db.idCtr += 1
-	db.mu.Unlock()
 	return nextId
 }
 
 // creates an empty segment and appends it to the segment list.
 // Changes the writer so new data is written to this segment.
-func (db *DB) createSegment() error {
-	id := db.claimNextSegmentId()
-
-	seg, err := newSegment(db.dir, id)
+func (db *DB) createSegment() (*segment, error) {
+	seg, err := newSegment(db.dir, db.claimNextSegmentId())
 	if err != nil {
-		return fmt.Errorf("new segment %q: %w", id, err)
+		return nil, fmt.Errorf("create new segment %q: %w", seg.id, err)
 	}
 
-	db.activateSegment(seg)
-	if err := db.overwriteManifest(); err != nil {
-		return fmt.Errorf("overwrite manifest: %w", err)
-	}
-
-	return nil
-}
-
-// adds the segment to the list which activates it
-func (db *DB) activateSegment(seg *segment) {
 	db.segments = append(db.segments, seg)
+
+	if err := db.overwriteManifest(); err != nil {
+		return nil, fmt.Errorf("overwrite manifest: %w", err)
+	}
+
+	return seg, nil
 }
 
 func (db *DB) Close() error {
+	db.rw.Lock()
+	defer db.rw.Unlock()
+
 	// close all segments
 	for _, s := range db.segments {
 		// block until the OS has flushed those pages to stable storage
@@ -244,14 +234,14 @@ type recordLocation struct {
 
 func (db *DB) Get(key string) (string, error) {
 	db.rw.RLock()
+	defer db.rw.RUnlock()
+
 	loc, ok := db.index[key]
 	if !ok {
-		db.rw.RUnlock()
 		return "", fmt.Errorf("%w: %q", ErrKeyNotFound, key)
 	}
 
 	val, err := db.readValueAt(loc)
-	db.rw.RUnlock()
 	if err != nil {
 		// this is an unexpected error, because if key is on index,
 		// its corresponding value should exist on the disk file
@@ -287,46 +277,27 @@ func (db *DB) readValueAt(loc *recordLocation) (val string, err error) {
 	return val, nil
 }
 
-func (db *DB) tryMerge() {
-	select {
-	case db.sem <- struct{}{}:
-		go func() {
-			defer func() {
-				// release when done
-				<-db.sem
-			}()
-			// fmt.Println("goroutine started")
-			// time.Sleep(3 * time.Second)
-
-			if err := db.merge(); err != nil {
-				select {
-				case db.mergeErr <- err:
-				default:
-				}
-			}
-		}()
-
-	default:
-		fmt.Println("already running sry")
-	}
-}
-
 func (db *DB) Set(key, val string) error {
+	//db.tryMerge()
 	db.rw.Lock()
 	defer db.rw.Unlock()
 
-	if db.activeSegment().size > db.segmentSizeMax {
-		// we will close the current segment and create a new segment here.
-		if err := db.createSegment(); err != nil {
+	var err error
+
+	// get active segment
+	seg := db.segments[len(db.segments)-1]
+
+	if seg.size > db.segmentSizeMax {
+		// we will have a new segment active
+		seg, err = db.createSegment()
+		if err != nil {
 			return err
 		}
 
 		if len(db.segments) > 100 { // this is for now, there will be a better way to decide later
-			db.tryMerge()
+			//db.tryMerge()
 		}
 	}
-
-	seg := db.activeSegment()
 
 	off, err := seg.write(key, val, db.fsync)
 	if err != nil {
@@ -357,9 +328,3 @@ func (db *DB) DiskSize() (int64, error) {
 	}
 	return total, nil
 }
-
-// todo handle this correctly on server. Maybe subscribe to this, or maybe we should
-//  give a way for server to pass a callback to the db idk.
-// MergeErrors returns a read-only channel that delivers errors produced by
-// background merge jobs (if any). The channel is never closed.
-func (db *DB) MergeErrors() <-chan error { return db.mergeErr }

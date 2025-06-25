@@ -50,14 +50,13 @@ func parseSegment(dir string, id int) (*segment, []keyOffset, error) {
 		}
 	}()
 
-	var kOffs []keyOffset
+	var keyOffs []keyOffset
 
-	// fill the db index with the key locations from the current segment
+	// collect the key offsets from the current segment
 	rs := newRecordScanner(seg)
 	for rs.scan() {
 		r := rs.record
-		//db.index[r.key] = &recordLocation{seg: seg, offset: r.off}
-		kOffs = append(kOffs, keyOffset{key: r.key, off: r.off})
+		keyOffs = append(keyOffs, keyOffset{key: r.key, off: r.off})
 	}
 
 	err = rs.err // catch the possible error from scan
@@ -78,7 +77,9 @@ func parseSegment(dir string, id int) (*segment, []keyOffset, error) {
 		return nil, nil, err
 	}
 
-	return seg, kOffs, nil
+	seg.writer = bufio.NewWriter(f)
+
+	return seg, keyOffs, nil
 }
 
 // write writes record to the segment and returns the key offset
