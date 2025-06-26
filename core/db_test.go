@@ -11,7 +11,7 @@ import (
 )
 
 func TestSetAndGet(t *testing.T) {
-	_, db := SetupTempDb(t)
+	_, db := SetupTempDb(t, WithMergeEnabled(false))
 
 	// set a key and retrieve it
 	if err := db.Set("foo", "bar"); err != nil {
@@ -26,7 +26,7 @@ func TestSetAndGet(t *testing.T) {
 }
 
 func TestOverwrite(t *testing.T) {
-	_, db := SetupTempDb(t)
+	_, db := SetupTempDb(t, WithMergeEnabled(false))
 
 	// set a key twice
 	_ = db.Set("key", "first")
@@ -40,7 +40,7 @@ func TestOverwrite(t *testing.T) {
 }
 
 func TestKeyNotFound(t *testing.T) {
-	_, db := SetupTempDb(t)
+	_, db := SetupTempDb(t, WithMergeEnabled(false))
 
 	if _, err := db.Get("missing"); !errors.Is(err, ErrKeyNotFound) {
 		t.Errorf("expected KeyNotFoundError, got %v", err)
@@ -48,14 +48,14 @@ func TestKeyNotFound(t *testing.T) {
 }
 
 func TestPersistence(t *testing.T) {
-	path, db := SetupTempDb(t)
+	path, db := SetupTempDb(t, WithMergeEnabled(false))
 
 	_ = db.Set("a", "1")
 	_ = db.Set("b", "2")
 	_ = db.Close()
 
 	// Re-open
-	db2, err := Open(path)
+	db2, err := Open(path, WithMergeEnabled(false))
 	if err != nil {
 		t.Fatalf("reopen failed: %v", err)
 	}
@@ -70,14 +70,14 @@ func TestPersistence(t *testing.T) {
 }
 
 func TestLoadIndexOverwrite(t *testing.T) {
-	path, db := SetupTempDb(t)
+	path, db := SetupTempDb(t, WithMergeEnabled(false))
 
 	_ = db.Set("foo", "first")
 	_ = db.Set("foo", "second")
 	_ = db.Close()
 
 	// Now reopen and Get should return "second"
-	db2, _ := Open(path)
+	db2, _ := Open(path, WithMergeEnabled(false))
 	defer db2.Close() // nolint:errcheck
 	if val, err := db2.Get("foo"); err != nil || val != "second" {
 		t.Errorf("wanted final 'second', got %q", val)
@@ -85,7 +85,7 @@ func TestLoadIndexOverwrite(t *testing.T) {
 }
 
 func TestEmptyDB(t *testing.T) {
-	_, db := SetupTempDb(t)
+	_, db := SetupTempDb(t, WithMergeEnabled(false))
 
 	if _, err := db.Get("nope"); !errors.Is(err, ErrKeyNotFound) {
 		t.Errorf("expected KeyNotFoundError on empty DB, got %v", err)
@@ -93,7 +93,7 @@ func TestEmptyDB(t *testing.T) {
 }
 
 func TestManyKeys(t *testing.T) {
-	_, db := SetupTempDb(t)
+	_, db := SetupTempDb(t, WithMergeEnabled(false))
 
 	for i := 0; i < 1000; i++ {
 		k, v := fmt.Sprintf("k%03d", i), fmt.Sprintf("v%03d", i)
@@ -109,7 +109,7 @@ func TestManyKeys(t *testing.T) {
 }
 
 func TestTruncatedHeader(t *testing.T) {
-	dir, _ := SetupTempDb(t)
+	dir, _ := SetupTempDb(t, WithMergeEnabled(false))
 
 	// Manually write a valid record + only half of the next header
 	f, _ := os.Create(filepath.Join(dir, "seg001"))
@@ -120,7 +120,7 @@ func TestTruncatedHeader(t *testing.T) {
 	_ = f.Close()
 
 	// Open should succeed, index should only contain "x"
-	db, err := Open(dir)
+	db, err := Open(dir, WithMergeEnabled(false))
 	if err != nil {
 		t.Fatalf("Open on truncated header: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestTruncatedHeader(t *testing.T) {
 }
 
 func TestTruncatedKey(t *testing.T) {
-	dir, _ := SetupTempDb(t)
+	dir, _ := SetupTempDb(t, WithMergeEnabled(false))
 
 	// write header for keyLen=3,valLen=2, then only 1 byte of the key
 	f, _ := os.Create(filepath.Join(dir, "seg001"))
@@ -144,7 +144,7 @@ func TestTruncatedKey(t *testing.T) {
 	_, _ = f.Write([]byte("x"))
 	_ = f.Close()
 
-	db, err := Open(dir)
+	db, err := Open(dir, WithMergeEnabled(false))
 	if err != nil {
 		t.Fatalf("open on partial-key: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestTruncatedKey(t *testing.T) {
 }
 
 func TestTruncatedValue(t *testing.T) {
-	dir, _ := SetupTempDb(t)
+	dir, _ := SetupTempDb(t, WithMergeEnabled(false))
 
 	// write one good record, then header+full key, but only 1 of 2 value bytes
 	f, _ := os.Create(filepath.Join(dir, "seg001"))
@@ -168,7 +168,7 @@ func TestTruncatedValue(t *testing.T) {
 	_, _ = f.Write([]byte("X"))
 	_ = f.Close()
 
-	db, err := Open(dir)
+	db, err := Open(dir, WithMergeEnabled(false))
 	if err != nil {
 		t.Fatalf("open on partial-value: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestTruncatedValue(t *testing.T) {
 }
 
 func TestOverwriteAfterPartialAppend(t *testing.T) {
-	dir, db := SetupTempDb(t)
+	dir, db := SetupTempDb(t, WithMergeEnabled(false))
 
 	// 1) Write two good records: "a"→"1", "b"→"2"
 	_ = db.Set("a", "1")
@@ -207,7 +207,7 @@ func TestOverwriteAfterPartialAppend(t *testing.T) {
 	_ = f.Close()
 
 	// 3) Re-open the DB (scanSegment will stop at offC, and db.offset will be set to offC)
-	db2, err := Open(dir)
+	db2, err := Open(dir, WithMergeEnabled(false))
 	if err != nil {
 		t.Fatalf("OpenDB after partial append: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestSegmentCount(t *testing.T) {
 	expectedSegs := (totalWrites + writesPerSeg - 1) / writesPerSeg
 
 	// open with tiny segment threshold
-	_, db := SetupTempDb(t, WithSegmentSizeMax(int64(segSizeMax)))
+	_, db := SetupTempDb(t, WithSegmentSizeMax(int64(segSizeMax)), WithMergeEnabled(false))
 
 	// drive all the writes
 	for r := 0; r < rounds; r++ {
@@ -283,7 +283,7 @@ func TestSegmentCount(t *testing.T) {
 }
 
 func TestGetLatestWinsAcrossSegments(t *testing.T) {
-	_, db := SetupTempDb(t, WithSegmentSizeMax(1)) // force a new segment per write
+	_, db := SetupTempDb(t, WithSegmentSizeMax(1), WithMergeEnabled(false)) // force a new segment per write
 
 	_ = db.Set("k", "v1")
 	_ = db.Set("k", "v2")
@@ -295,7 +295,7 @@ func TestGetLatestWinsAcrossSegments(t *testing.T) {
 }
 
 func TestRecoveryAcrossSegmentBoundary(t *testing.T) {
-	dir, db := SetupTempDb(t, WithSegmentSizeMax(16))
+	dir, db := SetupTempDb(t, WithSegmentSizeMax(16), WithMergeEnabled(false))
 
 	// ─── SETUP: roll three segments by overwriting the same key ───
 	_ = db.Set("foo", "A")
@@ -310,7 +310,7 @@ func TestRecoveryAcrossSegmentBoundary(t *testing.T) {
 	_ = f.Close()
 
 	// ─── RECOVER: re-open and check that "C" was dropped, so Get returns "B" ───
-	db2, err := Open(dir, WithSegmentSizeMax(16))
+	db2, err := Open(dir, WithSegmentSizeMax(16), WithMergeEnabled(false))
 	if err != nil {
 		t.Fatalf("reopen failed: %v", err)
 	}
@@ -330,7 +330,7 @@ func TestRecoveryAcrossSegmentBoundary(t *testing.T) {
 // the value from the segment that appears last in the file, regardless of its
 // numeric id.
 func TestManifestOrderingAffectsWinner(t *testing.T) {
-	dir, db := SetupTempDb(t, WithSegmentSizeMax(1)) // force 1 key per segment
+	dir, db := SetupTempDb(t, WithSegmentSizeMax(1), WithMergeEnabled(false)) // force 1 key per segment
 
 	_ = db.Set("k", "old") // seg001
 	_ = db.Set("k", "new") // seg002 (last-writer-wins originally)
@@ -342,7 +342,7 @@ func TestManifestOrderingAffectsWinner(t *testing.T) {
 		t.Fatalf("rewrite manifest: %v", err)
 	}
 
-	reopened, err := Open(dir, WithSegmentSizeMax(db.segmentSizeMax))
+	reopened, err := Open(dir, WithSegmentSizeMax(db.segmentSizeMax), WithMergeEnabled(false))
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -357,7 +357,7 @@ func TestManifestOrderingAffectsWinner(t *testing.T) {
 // with a new id but before any bytes were written to that file.  On reopen the
 // DB should reuse the zero-byte file as its active writer.
 func TestEmptyTailSegmentReuse(t *testing.T) {
-	dir, db := SetupTempDb(t)
+	dir, db := SetupTempDb(t, WithMergeEnabled(false))
 	_ = db.Set("a", "1") // seg001 with data
 
 	// Force-create an empty seg002 and *do not* write to it.
@@ -368,7 +368,7 @@ func TestEmptyTailSegmentReuse(t *testing.T) {
 	empty := getSegmentPath(db.dir, seg.id)
 	_ = db.Close()
 
-	db2, err := Open(dir, WithSegmentSizeMax(db.segmentSizeMax))
+	db2, err := Open(dir, WithSegmentSizeMax(db.segmentSizeMax), WithMergeEnabled(false))
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -396,7 +396,7 @@ func TestNextFileNumberSkipsGaps(t *testing.T) {
 	}
 	_ = os.WriteFile(filepath.Join(dir, "MANIFEST"), []byte("5\n9\n"), 0o644)
 
-	db, err := Open(dir, WithSegmentSizeMax(1))
+	db, err := Open(dir, WithSegmentSizeMax(1), WithMergeEnabled(false))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

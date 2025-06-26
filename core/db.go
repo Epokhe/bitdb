@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 )
 
 // todo go test -race
@@ -20,11 +21,12 @@ type DB struct {
 	segmentSizeMax int64                      // maximum size a segment can reach
 	fsync          bool                       // whether to fsync on each Set call
 	mergeSem       chan struct{}              // merge semaphore
-	rw             sync.RWMutex               // guards segments & index & manifest & idCtr
+	rw             sync.RWMutex               // guards segments & index & manifest
 	mergeErr       chan error                 // async merge error reporting
-	idCtr          int                        // segment id counter
+	idCtr          int64                      // segment id counter
 	index          map[string]*recordLocation // maps each key to its last-seen location
 	manifest       *os.File                   // open file handle for manifest
+	mergeEnabled   bool                       // whether merge is enabled
 }
 
 var ErrKeyNotFound = errors.New("key not found")
@@ -37,6 +39,10 @@ func WithFsync(b bool) Option {
 	return func(db *DB) { db.fsync = b }
 }
 
+func WithMergeEnabled(b bool) Option {
+	return func(db *DB) { db.mergeEnabled = b }
+}
+
 type Option func(*DB)
 
 func Open(dir string, opts ...Option) (*DB, error) {
@@ -47,6 +53,7 @@ func Open(dir string, opts ...Option) (*DB, error) {
 		mergeSem:       make(chan struct{}, 1),
 		index:          make(map[string]*recordLocation),
 		mergeErr:       make(chan error, 1),
+		mergeEnabled:   true,
 	}
 
 	// apply options
@@ -105,7 +112,7 @@ func Open(dir string, opts ...Option) (*DB, error) {
 	}
 
 	// set the segment id counter
-	db.idCtr = maxId + 1
+	db.idCtr = int64(maxId + 1)
 
 	// in case this is a new folder, we create the empty segment
 	if len(db.segments) == 0 {
@@ -166,9 +173,9 @@ func getSegmentPath(dir string, id int) string {
 }
 
 func (db *DB) claimNextSegmentId() int {
-	nextId := db.idCtr
-	db.idCtr += 1
-	return nextId
+	// We atomically increment and return the previous value so callers always
+	// get a unique id even under concurrency without needing external locks.
+	return int(atomic.AddInt64(&db.idCtr, 1) - 1)
 }
 
 // creates an empty segment and appends it to the segment list.
@@ -278,7 +285,6 @@ func (db *DB) readValueAt(loc *recordLocation) (val string, err error) {
 }
 
 func (db *DB) Set(key, val string) error {
-	//db.tryMerge()
 	db.rw.Lock()
 	defer db.rw.Unlock()
 
@@ -294,8 +300,8 @@ func (db *DB) Set(key, val string) error {
 			return err
 		}
 
-		if len(db.segments) > 100 { // this is for now, there will be a better way to decide later
-			//db.tryMerge()
+		if db.mergeEnabled && len(db.segments) > 100 { // this is for now, there will be a better way to decide later
+			db.tryMerge()
 		}
 	}
 
