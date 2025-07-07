@@ -7,13 +7,13 @@ tempdir := env("LSMTREE_TMPDIR", "/tmp")
 foo:
     @echo {{tempdir}}
 
-# run tests
+# Run all tests (or single tests via -run in ARGS)
 test *ARGS:
     TMPDIR={{tempdir}} go test {{ARGS}} ./core/
 
-# run a single test
-testsingle NAME *ARGS:
-    TMPDIR={{tempdir}} go test {{ARGS}} ./core/ -run '^{{NAME}}$'
+# Run with race detector + synctest (again, single tests via -run)
+testrace *ARGS:
+    TMPDIR={{tempdir}} GOEXPERIMENT=synctest go test -race {{ARGS}} ./core/
 
 # run benchmarks
 bench *ARGS:
