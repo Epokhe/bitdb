@@ -9,4 +9,8 @@ jobs:
       - uses: actions/setup-go@v4
       - name: Install just
         run: sudo apt-get update && sudo apt-get install -y just
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
+            | sh -s -- -b /usr/local/bin v2.2.1
       - uses: pre-commit/action@v3.0.1
