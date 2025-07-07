@@ -1,11 +1,8 @@
 # Note: I added this to Hetzner to run tests on an attached volume
 # (because of fsync problem on local disk)
-# export LSMTREE_TMPDIR=/mnt/HC_Volume_102592592/tmp
+# export BITDB_TMPDIR=/mnt/HC_Volume_102592592/tmp
 
-tempdir := env("LSMTREE_TMPDIR", "/tmp")
-
-foo:
-    @echo {{tempdir}}
+tempdir := env("BITDB_TMPDIR", "/tmp")
 
 # Run all tests (or single tests via -run in ARGS)
 test *ARGS:
@@ -30,7 +27,7 @@ profile NAME *ARGS:
 
 # sync to remote
 sync:
-    rsync -avzh --exclude .git ../lsm-tree overseer:~/
+    rsync -avzh --exclude .git ../bitdb overseer:~/
 
 # lint with golangci-lint
 lint:

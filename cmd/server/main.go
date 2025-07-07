@@ -3,8 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/epokhe/lsm-tree/cmd/remote"
-	"github.com/epokhe/lsm-tree/core"
+	"github.com/epokhe/bitdb/cmd/remote"
+	"github.com/epokhe/bitdb/core"
 	"log"
 	"os"
 	"os/signal"
