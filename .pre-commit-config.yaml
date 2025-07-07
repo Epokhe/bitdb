@@ -1,0 +1,13 @@
+repos:
+  - repo: local
+    hooks:
+      - id: lint
+        name: go lint
+        entry: just lint
+        language: system
+        pass_filenames: false
+      - id: testrace
+        name: go tests (race)
+        entry: just testrace
+        language: system
+        pass_filenames: false

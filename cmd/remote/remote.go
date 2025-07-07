@@ -1,3 +1,4 @@
+// Package remote provides an RPC wrapper around the core DB.
 package remote
 
 import (

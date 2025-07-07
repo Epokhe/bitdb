@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func SetupTempDb(tb testing.TB, dbOpts ...Option) (path string, db *DB) {
+func SetupTempDB(tb testing.TB, dbOpts ...Option) (path string, db *DB) {
 	tb.Helper()
 
 	// make a temp dir

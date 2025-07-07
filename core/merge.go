@@ -37,7 +37,7 @@ func (db *DB) MergeErrors() <-chan error { return db.mergeErr }
 
 func (db *DB) rolloverSegment(out *mergeOutput) (*segment, error) {
 	// create a new merge segment
-	seg, err := newSegment(db.dir, db.claimNextSegmentId())
+	seg, err := newSegment(db.dir, db.claimNextSegmentID())
 	if err != nil {
 		return nil, fmt.Errorf("create merge segment %q: %w", seg.id, err)
 	}
@@ -71,7 +71,7 @@ func (db *DB) merge() error {
 
 			// key should always exist in the index
 			db.rw.RLock()
-			loc, _ := db.index[rec.key]
+			loc := db.index[rec.key]
 			db.rw.RUnlock()
 
 			// we will include latest occurrence the record

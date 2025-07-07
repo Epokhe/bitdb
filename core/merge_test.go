@@ -11,7 +11,7 @@ import (
 // then forces a merge by limiting both segment size and threshold
 func TestMergeRunsOnlyWhenThresholdExceeded(t *testing.T) {
 	synctest.Run(func() {
-		_, db := SetupTempDb(t,
+		_, db := SetupTempDB(t,
 			WithSegmentSizeMax(1), // every Set rolls segment
 			WithMergeAfter(2),     // start merge after 2 inactive segments
 			WithMergeEnabled(true),
@@ -39,7 +39,7 @@ func TestMergeRunsOnlyWhenThresholdExceeded(t *testing.T) {
 // TestMergeKeepsLatestValue checks last-writer-wins correctness across merge.
 func TestMergeKeepsLatestValue(t *testing.T) {
 	synctest.Run(func() {
-		_, db := SetupTempDb(t,
+		_, db := SetupTempDB(t,
 			WithSegmentSizeMax(1),
 			WithMergeAfter(1), // merge after every rollover
 			WithMergeEnabled(true),
@@ -58,7 +58,7 @@ func TestMergeKeepsLatestValue(t *testing.T) {
 // TestMergeDropsObsoleteRecords ensures overwritten keys are removed.
 func TestMergeDropsObsoleteRecords(t *testing.T) {
 	synctest.Run(func() {
-		_, db := SetupTempDb(t,
+		_, db := SetupTempDB(t,
 			WithSegmentSizeMax(1),
 			WithMergeAfter(1),
 			WithMergeEnabled(true),

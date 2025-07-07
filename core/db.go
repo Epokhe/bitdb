@@ -1,3 +1,4 @@
+// Package core provides the core LSM-Tree implementation.
 package core
 
 import (
@@ -12,8 +13,6 @@ import (
 	"sync"
 	"sync/atomic"
 )
-
-// todo go test -race
 
 type DB struct {
 	dir            string                     // data directory
@@ -92,17 +91,17 @@ func Open(dir string, opts ...Option) (*DB, error) {
 	}
 
 	// load all segments according to manifest file
-	var maxId int
+	var maxID int
 	scanner := bufio.NewScanner(db.manifest)
 	for scanner.Scan() {
-		var segId int
-		segId, _ = strconv.Atoi(scanner.Text())
+		var segID int
+		segID, _ = strconv.Atoi(scanner.Text())
 
 		var seg *segment
 		var keyOffs []keyOffset
-		seg, keyOffs, err = parseSegment(db.dir, segId)
+		seg, keyOffs, err = parseSegment(db.dir, segID)
 		if err != nil {
-			return nil, fmt.Errorf("loadsegment %q: %w", segId, err)
+			return nil, fmt.Errorf("loadsegment %q: %w", segID, err)
 		}
 
 		// update db index with the returned offsets
@@ -113,8 +112,8 @@ func Open(dir string, opts ...Option) (*DB, error) {
 		db.segments = append(db.segments, seg)
 
 		// also, compute max segment id so we can set the counter
-		if segId > maxId {
-			maxId = segId
+		if segID > maxID {
+			maxID = segID
 		}
 	}
 
@@ -123,7 +122,7 @@ func Open(dir string, opts ...Option) (*DB, error) {
 	}
 
 	// set the segment id counter
-	db.idCtr = int64(maxId + 1)
+	db.idCtr = int64(maxID + 1)
 
 	// in case this is a new folder, we create the empty segment
 	if len(db.segments) == 0 {
@@ -183,7 +182,7 @@ func getSegmentPath(dir string, id int) string {
 	return filepath.Join(dir, fmt.Sprintf("seg%03d", id))
 }
 
-func (db *DB) claimNextSegmentId() int {
+func (db *DB) claimNextSegmentID() int {
 	// We atomically increment and return the previous value so callers always
 	// get a unique id even under concurrency without needing external locks.
 	return int(atomic.AddInt64(&db.idCtr, 1) - 1)
@@ -192,7 +191,7 @@ func (db *DB) claimNextSegmentId() int {
 // creates an empty segment and appends it to the segment list.
 // Changes the writer so new data is written to this segment.
 func (db *DB) addSegment() (*segment, error) {
-	seg, err := newSegment(db.dir, db.claimNextSegmentId())
+	seg, err := newSegment(db.dir, db.claimNextSegmentID())
 	if err != nil {
 		return nil, fmt.Errorf("create new segment %q: %w", seg.id, err)
 	}

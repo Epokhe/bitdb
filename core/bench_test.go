@@ -6,7 +6,7 @@ import (
 )
 
 func Benchmark_Get(b *testing.B) {
-	_, db := SetupTempDb(b, WithMergeEnabled(false))
+	_, db := SetupTempDB(b, WithMergeEnabled(false))
 
 	// preload some keys so Get has something to fetch
 	for i := 0; i < 10000; i++ {
@@ -27,7 +27,7 @@ func Benchmark_Get(b *testing.B) {
 }
 
 func Benchmark_Set(b *testing.B) {
-	_, db := SetupTempDb(b, WithMergeEnabled(false))
+	_, db := SetupTempDB(b, WithMergeEnabled(false))
 
 	// Run the timed loop of b.N Set calls
 	b.ResetTimer()
@@ -40,7 +40,7 @@ func Benchmark_Set(b *testing.B) {
 }
 
 func Benchmark_Fsync_Set(b *testing.B) {
-	_, db := SetupTempDb(b, WithFsync(true), WithMergeEnabled(false))
+	_, db := SetupTempDB(b, WithFsync(true), WithMergeEnabled(false))
 
 	// Run the timed loop of b.N Set calls
 	b.ResetTimer()
