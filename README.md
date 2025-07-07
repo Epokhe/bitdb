@@ -31,7 +31,7 @@ Use the `justfile` to run tests:
 just test
 ```
 
-A race-enabled variant is available:
+Test with race detector enabled:
 
 ```bash
 just testrace
