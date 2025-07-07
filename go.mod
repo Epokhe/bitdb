@@ -1,3 +1,3 @@
-module github.com/epokhe/lsm-tree
+module github.com/epokhe/bitdb
 
 go 1.24.2

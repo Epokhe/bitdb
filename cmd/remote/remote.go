@@ -1,7 +1,7 @@
 package remote
 
 import (
-	"github.com/epokhe/lsm-tree/core"
+	"github.com/epokhe/bitdb/core"
 	"log"
 	"net"
 	"net/rpc"

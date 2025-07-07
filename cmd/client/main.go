@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/epokhe/lsm-tree/cmd/remote"
+	"github.com/epokhe/bitdb/cmd/remote"
 	"log"
 	"net/rpc"
 	"os"
