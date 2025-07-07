@@ -1,6 +1,6 @@
 # BitDB
 
-BitDB is a lightweight key/value store written in Go. It is a toy project that I built while learning Go. It follows a [Bitcask](https://riak.com/assets/bitcask-intro.pdf) style architecture:
+BitDB is a lightweight key/value store written in Go. It is a toy project that I worked on while learning Go. It follows a [Bitcask](https://riak.com/assets/bitcask-intro.pdf) style architecture:
 
 * **Append-only segments** – all writes are appended to the active segment file. Older segments become read-only.
 * **In-memory index** – keys are mapped to the segment and byte offset of their latest value for fast reads.
