@@ -361,9 +361,9 @@ func TestEmptyTailSegmentReuse(t *testing.T) {
 	_ = db.Set("a", "1") // seg001 with data
 
 	// Force-create an empty seg002 and *do not* write to it.
-	seg, err := db.createSegment()
+	seg, err := db.addSegment()
 	if err != nil {
-		t.Fatalf("createSegment: %v", err)
+		t.Fatalf("addSegment: %v", err)
 	}
 	empty := getSegmentPath(db.dir, seg.id)
 	_ = db.Close()

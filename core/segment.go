@@ -9,8 +9,6 @@ import (
 	"os"
 )
 
-const DefaultSegmentSizeMax int64 = 1 * 1024 * 1024
-
 type segment struct {
 	id     int
 	file   *os.File      // open file handle for reading records
@@ -62,11 +60,11 @@ func parseSegment(dir string, id int) (*segment, []keyOffset, error) {
 	err = rs.err // catch the possible error from scan
 
 	// update segment size with the last correct offset
-	seg.size = rs.endOffset
+	seg.size = rs.end
 
 	// in case where we have a corrupted record,
 	// we truncate to the last "good" offset
-	err = seg.file.Truncate(rs.endOffset)
+	err = seg.file.Truncate(seg.size)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -164,20 +162,18 @@ type scannedRecord struct {
 	off int64 // start offset of the record in the segment
 }
 
-// todo explain reader here doesn't create a problem because
-//
-//	we're working with inactive segments. in case we read active segments,
-//	it could change file seek position which will lead to writes to incorrect
-//	place. at least that's my current understanding(scratch5)
+// recordScanner is a buffered segment reader that doesn't touch file handle
 type recordScanner struct {
-	reader    *bufio.Reader
-	record    *scannedRecord // keeps the current record information
-	endOffset int64          // keeps the end offset of the current record
-	err       error          // keeps error state
+	reader *bufio.Reader
+	record *scannedRecord // keeps the current record information
+	end    int64          // keeps the end offset of the current record
+	err    error          // keeps error state
 }
 
 func newRecordScanner(s *segment) *recordScanner {
-	return &recordScanner{reader: bufio.NewReader(s.file)}
+	const maxint64 = 1<<63 - 1 // maybe check file size instead
+	sr := io.NewSectionReader(s.file, 0, maxint64)
+	return &recordScanner{reader: bufio.NewReader(sr)}
 }
 
 func (rs *recordScanner) scan() bool {
@@ -240,7 +236,7 @@ func (rs *recordScanner) scan() bool {
 	rs.record = &scannedRecord{
 		key: string(keyBytes),
 		val: string(valBytes),
-		off: rs.endOffset,
+		off: rs.end,
 	}
 
 	// todo consider making this function configurable so that
@@ -259,7 +255,7 @@ func (rs *recordScanner) scan() bool {
 	//}
 
 	// advance offset for next record
-	rs.endOffset += int64(8 + keyLen + valLen)
+	rs.end += int64(8 + keyLen + valLen)
 
 	return true
 }

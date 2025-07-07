@@ -27,6 +27,7 @@ type DB struct {
 	index          map[string]*recordLocation // maps each key to its last-seen location
 	manifest       *os.File                   // open file handle for manifest
 	mergeEnabled   bool                       // whether merge is enabled
+	mergeAfter     int                        // run merge when inactive(merge-able) segment count exceeds this
 }
 
 var ErrKeyNotFound = errors.New("key not found")
@@ -43,17 +44,27 @@ func WithMergeEnabled(b bool) Option {
 	return func(db *DB) { db.mergeEnabled = b }
 }
 
+func WithMergeAfter(n int) Option {
+	return func(db *DB) {
+		if n > 0 {
+			db.mergeAfter = n
+		}
+	}
+}
+
 type Option func(*DB)
 
 func Open(dir string, opts ...Option) (*DB, error) {
 	db := &DB{
-		dir:            dir,
-		segmentSizeMax: DefaultSegmentSizeMax,
+		dir:      dir,
+		mergeSem: make(chan struct{}, 1),
+		index:    make(map[string]*recordLocation),
+		mergeErr: make(chan error, 1),
+		// default values
 		fsync:          false,
-		mergeSem:       make(chan struct{}, 1),
-		index:          make(map[string]*recordLocation),
-		mergeErr:       make(chan error, 1),
+		segmentSizeMax: 1 * 1024 * 1024,
 		mergeEnabled:   true,
+		mergeAfter:     100,
 	}
 
 	// apply options
@@ -117,7 +128,7 @@ func Open(dir string, opts ...Option) (*DB, error) {
 	// in case this is a new folder, we create the empty segment
 	if len(db.segments) == 0 {
 		// log.Println("No segment found, creating a new one...")
-		if _, err = db.createSegment(); err != nil {
+		if _, err = db.addSegment(); err != nil {
 			return nil, fmt.Errorf("createsegment: %w", err)
 		}
 	}
@@ -180,7 +191,7 @@ func (db *DB) claimNextSegmentId() int {
 
 // creates an empty segment and appends it to the segment list.
 // Changes the writer so new data is written to this segment.
-func (db *DB) createSegment() (*segment, error) {
+func (db *DB) addSegment() (*segment, error) {
 	seg, err := newSegment(db.dir, db.claimNextSegmentId())
 	if err != nil {
 		return nil, fmt.Errorf("create new segment %q: %w", seg.id, err)
@@ -295,12 +306,13 @@ func (db *DB) Set(key, val string) error {
 
 	if seg.size > db.segmentSizeMax {
 		// we will have a new segment active
-		seg, err = db.createSegment()
+		seg, err = db.addSegment()
 		if err != nil {
 			return err
 		}
 
-		if db.mergeEnabled && len(db.segments) > 100 { // this is for now, there will be a better way to decide later
+		// merging only inactive segments
+		if db.mergeEnabled && len(db.segments) > db.mergeAfter+1 {
 			db.tryMerge()
 		}
 	}
