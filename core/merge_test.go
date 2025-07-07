@@ -170,8 +170,9 @@ func TestMergeDisabled(t *testing.T) {
 			t.Fatalf("expected 5 segments without merge, got %d", got)
 		}
 		for i, seg := range db.segments {
-			if seg.id != i+1 {
-				t.Fatalf("expected seg id %d+1, got %d", i, seg.id)
+			want := i + 1
+			if seg.id != want {
+				t.Fatalf("expected seg id %d, got %d", want, seg.id)
 			}
 		}
 	})
