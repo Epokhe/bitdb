@@ -94,7 +94,7 @@ func TestMergeDropsObsoleteRecords(t *testing.T) {
 // are preserved and that segments created after the merge begins remain unmerged.
 func TestMergeWhileWriting(t *testing.T) {
 	synctest.Run(func() {
-		_, db := SetupTempDb(t,
+		_, db := SetupTempDB(t,
 			WithSegmentSizeMax(1),
 			WithMergeAfter(1),
 			WithMergeEnabled(true),
@@ -132,7 +132,7 @@ func TestMergeWhileWriting(t *testing.T) {
 // output segment when the size limit is tiny.
 func TestMergeProducesMultipleSegments(t *testing.T) {
 	synctest.Run(func() {
-		_, db := SetupTempDb(t,
+		_, db := SetupTempDB(t,
 			WithSegmentSizeMax(1),
 			WithMergeAfter(1),
 			WithMergeEnabled(true),
@@ -153,7 +153,7 @@ func TestMergeProducesMultipleSegments(t *testing.T) {
 // TestMergeDisabled verifies that merges do not run when disabled.
 func TestMergeDisabled(t *testing.T) {
 	synctest.Run(func() {
-		_, db := SetupTempDb(t,
+		_, db := SetupTempDB(t,
 			WithSegmentSizeMax(1),
 			WithMergeAfter(1),
 			WithMergeEnabled(false),
@@ -182,7 +182,7 @@ func TestMergeDisabled(t *testing.T) {
 // merge runs at a time.
 func TestSequentialMergeTriggers(t *testing.T) {
 	synctest.Run(func() {
-		_, db := SetupTempDb(t,
+		_, db := SetupTempDB(t,
 			WithSegmentSizeMax(1),
 			WithMergeAfter(1),
 			WithMergeEnabled(true),
