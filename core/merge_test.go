@@ -246,3 +246,68 @@ func TestMergeDisabled(t *testing.T) {
 		}
 	})
 }
+
+// TestMergePersistence verifies state is consistent after closing and reopening following a merge.
+func TestMergePersistence(t *testing.T) {
+	synctest.Run(func() {
+		dir, db := SetupTempDB(t,
+			WithRolloverThreshold(20),
+			WithMergeThreshold(3),
+			WithMergeEnabled(true),
+		)
+
+		_ = db.Set("a", "1")
+		_ = db.Set("b", "1") // seg1 over threshold, rollover
+		_ = db.Set("a", "2")
+		_ = db.Set("c", "3") // seg2 over threshold, rollover
+		_ = db.Set("d", "4")
+		_ = db.Set("b", "2") // seg3 over threshold, rollover, triggers merge
+
+		synctest.Wait()
+
+		// save segment ids before closing the db
+		segs := make([]int, len(db.segments))
+		for i, seg := range db.segments {
+			segs[i] = seg.id
+		}
+
+		// save values before closing the db
+		vals := map[string]string{}
+		for _, k := range []string{"a", "b", "c", "d"} {
+			v, err := db.Get(k)
+			if err != nil {
+				t.Fatalf("get %s: %v", k, err)
+			}
+			vals[k] = v
+		}
+
+		_ = db.Close()
+
+		reopened, err := Open(dir,
+			WithRolloverThreshold(20),
+			WithMergeThreshold(3),
+			WithMergeEnabled(true),
+		)
+		if err != nil {
+			t.Fatalf("reopen: %v", err)
+		}
+		defer reopened.Close() // nolint:errcheck
+		
+		if len(reopened.segments) != len(segs) {
+			t.Fatalf("segment count mismatch after reopen: got %d want %d",
+				len(reopened.segments), len(segs))
+		}
+		for i, seg := range reopened.segments {
+			if seg.id != segs[i] {
+				t.Fatalf("seg id mismatch at %d: got %d want %d", i, seg.id, segs[i])
+			}
+		}
+
+		for k, want := range vals {
+			got, err := reopened.Get(k)
+			if err != nil || got != want {
+				t.Fatalf("want %s=%s, got %s err=%v", k, want, got, err)
+			}
+		}
+	})
+}
