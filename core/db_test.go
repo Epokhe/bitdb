@@ -228,10 +228,10 @@ func TestOverwriteAfterPartialAppend(t *testing.T) {
 
 func TestSegmentCount(t *testing.T) {
 	const (
-		keys        = 10
-		rounds      = 5 // overwrite each key this many times
-		segSizeMax  = 1 * 32
-		totalWrites = keys * rounds
+		keys              = 10
+		rounds            = 5 // overwrite each key this many times
+		rolloverThreshold = 1 * 32
+		totalWrites       = keys * rounds
 
 		// calculate the size of a single record
 		overhead = 8 // 4B keyLen + 4B valLen
@@ -242,7 +242,7 @@ func TestSegmentCount(t *testing.T) {
 		// With post-write rollover, a segment can fit n writes where the size
 		// after the nth write is the first to be >= the threshold.
 		// The number of writes that fit is floor((threshold-1)/writeLen) + 1.
-		writesPerSeg = (segSizeMax-1)/writeLen + 1
+		writesPerSeg = (rolloverThreshold-1)/writeLen + 1
 
 		// The DB starts with 1 segment. A new segment is created after a
 		// rollover is triggered. The number of rollovers is totalWrites / writesPerSeg.
@@ -250,7 +250,7 @@ func TestSegmentCount(t *testing.T) {
 	)
 
 	// open with tiny segment threshold
-	_, db := SetupTempDB(t, WithRolloverThreshold(int64(segSizeMax)), WithMergeEnabled(false))
+	_, db := SetupTempDB(t, WithRolloverThreshold(int64(rolloverThreshold)), WithMergeEnabled(false))
 
 	// drive all the writes
 	for r := 0; r < rounds; r++ {
@@ -269,7 +269,7 @@ func TestSegmentCount(t *testing.T) {
 
 	t.Logf(
 		"writesPerSeg=%d, expectedSegs=%d, observedSegs=%d; segSizeMax=%d, diskSize=%d",
-		writesPerSeg, expectedSegs, segs, segSizeMax, size,
+		writesPerSeg, expectedSegs, segs, rolloverThreshold, size,
 	)
 
 	if segs != expectedSegs {
