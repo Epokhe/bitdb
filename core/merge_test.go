@@ -369,3 +369,60 @@ func TestMultipleSequentialMerges(t *testing.T) {
 		}
 	})
 }
+
+func TestMergeAfterTruncatedRecord(t *testing.T) {
+	synctest.Run(func() {
+		dir, _ := SetupTempDB(t, WithMergeEnabled(false))
+
+		// overwrite seg001 with a valid record followed by an incomplete one
+		f, err := os.Create(filepath.Join(dir, "seg001"))
+		if err != nil {
+			t.Fatalf("create seg001: %v", err)
+		}
+		// good record k->v
+		_, _ = f.Write([]byte{1, 0, 0, 0, 1, 0, 0, 0, 'k', 'v'})
+		// header for second record (keyLen=2,valLen=2) + key but only 1 byte of value
+		_, _ = f.Write([]byte{2, 0, 0, 0, 2, 0, 0, 0})
+		_, _ = f.Write([]byte("hi"))
+		_, _ = f.Write([]byte("X"))
+		_ = f.Close()
+
+		db, err := Open(dir,
+			WithRolloverThreshold(20),
+			WithMergeThreshold(2),
+			WithMergeEnabled(true),
+		)
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+
+		// Add writes to force two rollovers and trigger merge
+		_ = db.Set("a", "1") // completes seg001 and rolls to seg002
+		_ = db.Set("b", "2")
+		_ = db.Set("c", "3") // rolls to seg003 and triggers merge
+
+		synctest.Wait()
+
+		select {
+		case err := <-db.MergeErrors():
+			t.Fatalf("merge error: %v", err)
+		default:
+		}
+
+		if v, err := db.Get("k"); err != nil || v != "v" {
+			t.Fatalf("expected k=v, got %q, %v", v, err)
+		}
+		if _, err := db.Get("hi"); !errors.Is(err, ErrKeyNotFound) {
+			t.Fatalf("expected hi missing, got %v", err)
+		}
+		if v, _ := db.Get("a"); v != "1" {
+			t.Fatalf("expected a=1, got %q", v)
+		}
+		if v, _ := db.Get("b"); v != "2" {
+			t.Fatalf("expected b=2, got %q", v)
+		}
+		if v, _ := db.Get("c"); v != "3" {
+			t.Fatalf("expected c=3, got %q", v)
+		}
+	})
+}
