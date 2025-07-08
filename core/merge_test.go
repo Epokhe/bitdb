@@ -137,7 +137,6 @@ func TestWritesWhileMerging(t *testing.T) {
 				// Trigger another one just in case
 				_ = db.Set("k6", "v6")
 				_ = db.Set("k7", "v7") // segment 4 over threshold, rollover, triggers merge(skipped)
-				// todo handle rollover comments in other tests
 
 				// At this point, there are 4 inactive + 1 active = 5 segments.
 
@@ -190,22 +189,23 @@ func TestMergeMultiRecordSegments(t *testing.T) {
 	synctest.Run(func() {
 		_, db := SetupTempDB(t,
 			WithRolloverThreshold(20),
-			WithMergeThreshold(1),
+			WithMergeThreshold(3),
 			WithMergeEnabled(true),
 		)
 
 		_ = db.Set("k1", "v1")
-		_ = db.Set("k2", "v2")
+		_ = db.Set("k2", "v2") // segment 1 over threshold, rollover
 		_ = db.Set("k1", "v3")
-		_ = db.Set("k3", "v3")
+		_ = db.Set("k3", "v3") // segment 2 over threshold, rollover
 		_ = db.Set("k4", "v4")
+		_ = db.Set("k2", "v5") // segment 3 over threshold, rollover, triggers merge
 
 		synctest.Wait()
 
 		if v, _ := db.Get("k1"); v != "v3" {
 			t.Fatalf("want k1=v3, got %q", v)
 		}
-		if v, _ := db.Get("k2"); v != "v2" {
+		if v, _ := db.Get("k2"); v != "v5" {
 			t.Fatalf("want k2=v2, got %q", v)
 		}
 		if v, _ := db.Get("k3"); v != "v3" {
@@ -222,7 +222,7 @@ func TestMergeDisabled(t *testing.T) {
 	synctest.Run(func() {
 		_, db := SetupTempDB(t,
 			WithRolloverThreshold(20),
-			WithMergeThreshold(1),
+			WithMergeThreshold(2),
 			WithMergeEnabled(false),
 		)
 
@@ -230,7 +230,7 @@ func TestMergeDisabled(t *testing.T) {
 		// Segment size limit is 20 bytes.
 		for i := 0; i < 6; i++ {
 			k := fmt.Sprintf("k%d", i)
-			_ = db.Set(k, "v") // Segment rollover every 2 sets.
+			_ = db.Set(k, "v") // Triggers segment rollover after 2 sets.
 		}
 
 		synctest.Wait()
