@@ -14,25 +14,27 @@ import (
 	"sync/atomic"
 )
 
+// todo merge configuration under one struct
+
 type DB struct {
-	dir            string                     // data directory
-	segments       []*segment                 // all segments. last one is the active segment
-	segmentSizeMax int64                      // maximum size a segment can reach
-	fsync          bool                       // whether to fsync on each Set call
-	mergeSem       chan struct{}              // merge semaphore
-	rw             sync.RWMutex               // guards segments & index & manifest
-	mergeErr       chan error                 // async merge error reporting
-	idCtr          int64                      // segment id counter
-	index          map[string]*recordLocation // maps each key to its last-seen location
-	manifest       *os.File                   // open file handle for manifest
-	mergeEnabled   bool                       // whether merge is enabled
-	mergeAfter     int                        // run merge when inactive(merge-able) segment count exceeds this
+	dir                      string                     // data directory
+	segments                 []*segment                 // all segments. last one is the active segment
+	fsync                    bool                       // whether to fsync on each Set call
+	mergeSem                 chan struct{}              // merge semaphore
+	rw                       sync.RWMutex               // guards segments & index & manifest
+	mergeErr                 chan error                 // async merge error reporting
+	idCtr                    int64                      // segment id counter
+	index                    map[string]*recordLocation // maps each key to its last-seen location
+	manifest                 *os.File                   // open file handle for manifest
+	mergeEnabled             bool                       // whether merge is enabled
+	segmentRolloverThreshold int64                      // rollover segment when the active segment reaches this
+	segmentMergeThreshold    int                        // run merge when inactive(merge-able) segment count reaches this
 }
 
 var ErrKeyNotFound = errors.New("key not found")
 
-func WithSegmentSizeMax(n int64) Option {
-	return func(db *DB) { db.segmentSizeMax = n }
+func WithSegmentRolloverThreshold(n int64) Option {
+	return func(db *DB) { db.segmentRolloverThreshold = n }
 }
 
 func WithFsync(b bool) Option {
@@ -43,11 +45,9 @@ func WithMergeEnabled(b bool) Option {
 	return func(db *DB) { db.mergeEnabled = b }
 }
 
-func WithMergeAfter(n int) Option {
+func WithMergeThreshold(n int) Option {
 	return func(db *DB) {
-		if n > 0 {
-			db.mergeAfter = n
-		}
+		db.segmentMergeThreshold = n
 	}
 }
 
@@ -60,10 +60,10 @@ func Open(dir string, opts ...Option) (*DB, error) {
 		index:    make(map[string]*recordLocation),
 		mergeErr: make(chan error, 1),
 		// default values
-		fsync:          false,
-		segmentSizeMax: 1 * 1024 * 1024,
-		mergeEnabled:   true,
-		mergeAfter:     100,
+		fsync:                    false,
+		segmentRolloverThreshold: 1 * 1024 * 1024,
+		mergeEnabled:             true,
+		segmentMergeThreshold:    100,
 	}
 
 	// apply options
@@ -303,19 +303,6 @@ func (db *DB) Set(key, val string) error {
 	// get active segment
 	seg := db.segments[len(db.segments)-1]
 
-	if seg.size > db.segmentSizeMax {
-		// we will have a new segment active
-		seg, err = db.addSegment()
-		if err != nil {
-			return err
-		}
-
-		// merging only inactive segments
-		if db.mergeEnabled && len(db.segments) > db.mergeAfter+1 {
-			db.tryMerge()
-		}
-	}
-
 	off, err := seg.write(key, val, db.fsync)
 	if err != nil {
 		return err
@@ -326,6 +313,20 @@ func (db *DB) Set(key, val string) error {
 	// if power is lost just before this line, no prob,
 	// index will be rebuilt anyway
 	db.index[key] = &recordLocation{seg: seg, offset: off}
+
+	// segment rollover and merging
+	if seg.size >= db.segmentRolloverThreshold {
+		// we will have a new segment active
+		seg, err = db.addSegment()
+		if err != nil {
+			return err
+		}
+
+		// +1 because threshold logic checks only inactive segments
+		if db.mergeEnabled && len(db.segments) >= db.segmentMergeThreshold+1 {
+			db.tryMerge()
+		}
+	}
 
 	return nil
 }

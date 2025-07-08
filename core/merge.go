@@ -85,8 +85,8 @@ func (db *DB) merge() error {
 
 			// prepare new segment if we grew over the limit
 			// rollover should happen only when there's still
-			// records left
-			if mergeSeg.size > db.segmentSizeMax {
+			// records left, that's why it's before write.
+			if mergeSeg.size >= db.segmentRolloverThreshold {
 				if mergeSeg, err = db.rolloverSegment(out); err != nil {
 					return err
 				}
