@@ -4,6 +4,7 @@ package core
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 	"testing/synctest"
 )
@@ -100,54 +101,85 @@ func TestMergeProducesMultipleSegments(t *testing.T) {
 		}
 
 		// check new ids. note that only first 3 should be updated, so they should be 5,6,7,4
-		want := [4]int{5, 6, 7, 4}
+		want := []int{5, 6, 7, 4}
 
 		for i, seg := range db.segments {
 			if seg.id != want[i] {
-				t.Fatalf("expected seg id %d, got %d", want, seg.id)
+				t.Fatalf("expected seg id %d, got %d", want[i], seg.id)
 			}
 		}
 	})
 }
 
-// TestMergeWhileWriting checks that writes performed while a merge is running
-// are preserved and that segments created after the merge begins remain unmerged.
-// todo this test may fail because we're not making merge wait...
-func TestMergeWhileWriting(t *testing.T) {
+// TestWritesWhileMerging checks two critical concurrency behaviors:
+//  1. Writes that occur while a merge is active are correctly preserved.
+//  2. Multiple rapid-fire merge triggers result in only a single merge operation,
+//     preventing race conditions.
+func TestWritesWhileMerging(t *testing.T) {
 	synctest.Run(func() {
-		_, db := SetupTempDB(t,
+		var wg sync.WaitGroup
+		wg.Add(1)
+
+		var db *DB
+
+		_, db = SetupTempDB(t,
 			WithRolloverThreshold(20),
-			WithMergeThreshold(1),
+			WithMergeThreshold(2), // Merge after 2 inactive segments.
 			WithMergeEnabled(true),
+			WithOnMergeStart(func() {
+				// Pause the merge as soon as it starts.
+				wg.Wait()
+
+				// Trigger another merge, which will be skipped because of semaphore lock
+				_ = db.Set("k1", "vx")
+				_ = db.Set("k5", "v5") // segment 3 over threshold, rollover, triggers merge(skipped)
+
+				// Trigger another one just in case
+				_ = db.Set("k6", "v6")
+				_ = db.Set("k7", "v7") // segment 4 over threshold, rollover, triggers merge(skipped)
+				// todo handle rollover comments in other tests
+
+				// At this point, there are 4 inactive + 1 active = 5 segments.
+
+			}),
 		)
 
-		// Each Set operation adds 8 bytes header + len(key) + len(value).
-		_ = db.Set("a", "1")
-		_ = db.Set("b", "2") // Segment rollover. triggers merge
+		// Create two inactive segments (seg 1, seg 2).
+		_ = db.Set("k1", "v1")
+		_ = db.Set("k2", "v2") // segment 1 over threshold, rollover
+		_ = db.Set("k2", "vy")
+		_ = db.Set("k4", "v4") // segment 2 over threshold, rollover, triggers merge
 
-		// merge is running, let's do more sets
-		_ = db.Set("a", "3")
-		_ = db.Set("b", "4") // Segment rollover. can't trigger merge
-		_ = db.Set("a", "5")
-		_ = db.Set("b", "6") // Segment rollover. can't trigger merge
+		// The merge starts on segments 1 and 2, and then immediately pauses.
+		// Rest of the Set calls happen inside the merge start callback
 
-		// currently 4 segments and merge is running.
-		// but merge won't merge shit, so we will have the same segments.
-
-		println(len(db.segments))
+		// Un-pause the merge, allowing it to complete.
+		wg.Done()
 		synctest.Wait()
 
-		if v, _ := db.Get("a"); v != "5" {
-			t.Fatalf("want a=6, got %q", v)
+		// k2 is merged, should have its latest value
+		if v, _ := db.Get("k2"); v != "vy" {
+			t.Fatalf("want k2=vy, got %q", v)
 		}
-		if v, _ := db.Get("b"); v != "6" {
-			t.Fatalf("want b=2, got %q", v)
+		// k1 got a new value outside the merge
+		if v, _ := db.Get("k1"); v != "vx" {
+			t.Fatalf("want k1=vx, got %q", v)
+		}
+		if v, _ := db.Get("k6"); v != "v6" {
+			t.Fatalf("want k6=v6, got %q", v)
 		}
 
-		println(len(db.segments))
+		// after merge, we should have seg1 and seg2 merge, decreasing segment count
+		if got := len(db.segments); got != 4 {
+			t.Fatalf("expected 4 segments without merge, got %d", got)
+		}
 
-		if got := len(db.segments); got < 3 {
-			t.Fatalf("expected at least 3 segments, got %d", got)
+		// Verify that only ONE merge ran by checking the final segment IDs.
+		want := []int{6, 3, 4, 5}
+		for i, seg := range db.segments {
+			if seg.id != want[i] {
+				t.Fatalf("expected seg id %d, got %d", want[i], seg.id)
+			}
 		}
 	})
 }
@@ -206,10 +238,10 @@ func TestMergeDisabled(t *testing.T) {
 		if got := len(db.segments); got != 4 {
 			t.Fatalf("expected 4 segments without merge, got %d", got)
 		}
-		want := [4]int{1, 2, 3, 4}
+		want := []int{1, 2, 3, 4}
 		for i, seg := range db.segments {
 			if seg.id != want[i] {
-				t.Fatalf("expected seg id %d, got %d", want, seg.id)
+				t.Fatalf("expected seg id %d, got %d", want[i], seg.id)
 			}
 		}
 	})

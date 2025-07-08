@@ -29,6 +29,7 @@ type DB struct {
 	mergeEnabled          bool                       // whether merge is enabled
 	rolloverThreshold     int64                      // rollover segment when the active segment reaches this
 	segmentMergeThreshold int                        // run merge when inactive(merge-able) segment count reaches this
+	onMergeStart          func()                     // test hook
 }
 
 var ErrKeyNotFound = errors.New("key not found")
@@ -51,14 +52,21 @@ func WithMergeThreshold(n int) Option {
 	}
 }
 
+func WithOnMergeStart(f func()) Option {
+	return func(db *DB) {
+		db.onMergeStart = f
+	}
+}
+
 type Option func(*DB)
 
 func Open(dir string, opts ...Option) (*DB, error) {
 	db := &DB{
-		dir:      dir,
-		mergeSem: make(chan struct{}, 1),
-		index:    make(map[string]*recordLocation),
-		mergeErr: make(chan error, 1),
+		dir:          dir,
+		mergeSem:     make(chan struct{}, 1),
+		index:        make(map[string]*recordLocation),
+		mergeErr:     make(chan error, 1),
+		onMergeStart: func() {},
 		// default values
 		fsync:                 false,
 		rolloverThreshold:     1 * 1024 * 1024,
@@ -127,7 +135,7 @@ func Open(dir string, opts ...Option) (*DB, error) {
 	// in case this is a new folder, we create the empty segment
 	if len(db.segments) == 0 {
 		// log.Println("No segment found, creating a new one...")
-		if _, err = db.addSegment(); err != nil {
+		if err = db.addSegment(); err != nil {
 			return nil, fmt.Errorf("createsegment: %w", err)
 		}
 	}
@@ -190,19 +198,19 @@ func (db *DB) claimNextSegmentID() int {
 
 // creates an empty segment and appends it to the segment list.
 // Changes the writer so new data is written to this segment.
-func (db *DB) addSegment() (*segment, error) {
+func (db *DB) addSegment() error {
 	seg, err := newSegment(db.dir, db.claimNextSegmentID())
 	if err != nil {
-		return nil, fmt.Errorf("create new segment %q: %w", seg.id, err)
+		return fmt.Errorf("create new segment: %w", err)
 	}
 
 	db.segments = append(db.segments, seg)
 
 	if err := db.overwriteManifest(); err != nil {
-		return nil, fmt.Errorf("overwrite manifest: %w", err)
+		return fmt.Errorf("overwrite manifest: %w", err)
 	}
 
-	return seg, nil
+	return nil
 }
 
 func (db *DB) Close() error {
@@ -317,7 +325,7 @@ func (db *DB) Set(key, val string) error {
 	// segment rollover and merging
 	if seg.size >= db.rolloverThreshold {
 		// we will have a new segment active
-		seg, err = db.addSegment()
+		err = db.addSegment()
 		if err != nil {
 			return err
 		}
