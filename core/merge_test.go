@@ -265,18 +265,20 @@ func TestMergePersistence(t *testing.T) {
 
 		synctest.Wait()
 
-		wantSegs := make([]int, len(db.segments))
+		// save segment ids before closing the db
+		segs := make([]int, len(db.segments))
 		for i, seg := range db.segments {
-			wantSegs[i] = seg.id
+			segs[i] = seg.id
 		}
 
-		wantVals := map[string]string{}
+		// save values before closing the db
+		vals := map[string]string{}
 		for _, k := range []string{"a", "b", "c", "d"} {
 			v, err := db.Get(k)
 			if err != nil {
 				t.Fatalf("get %s: %v", k, err)
 			}
-			wantVals[k] = v
+			vals[k] = v
 		}
 
 		_ = db.Close()
@@ -290,18 +292,18 @@ func TestMergePersistence(t *testing.T) {
 			t.Fatalf("reopen: %v", err)
 		}
 		defer reopened.Close() // nolint:errcheck
-
-		if len(reopened.segments) != len(wantSegs) {
+		
+		if len(reopened.segments) != len(segs) {
 			t.Fatalf("segment count mismatch after reopen: got %d want %d",
-				len(reopened.segments), len(wantSegs))
+				len(reopened.segments), len(segs))
 		}
 		for i, seg := range reopened.segments {
-			if seg.id != wantSegs[i] {
-				t.Fatalf("seg id mismatch at %d: got %d want %d", i, seg.id, wantSegs[i])
+			if seg.id != segs[i] {
+				t.Fatalf("seg id mismatch at %d: got %d want %d", i, seg.id, segs[i])
 			}
 		}
 
-		for k, want := range wantVals {
+		for k, want := range vals {
 			got, err := reopened.Get(k)
 			if err != nil || got != want {
 				t.Fatalf("want %s=%s, got %s err=%v", k, want, got, err)
