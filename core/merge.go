@@ -17,19 +17,19 @@ func newMergeOutput() *mergeOutput {
 }
 
 func (db *DB) tryMerge() {
+	// use a non-blocking send to acquire the semaphore
 	select {
 	case db.mergeSem <- struct{}{}:
+		// run merge in a new goroutine
 		go func() {
 			if err := db.merge(); err != nil {
 				db.mergeErr <- err
-			} else {
-				// release semaphore when there's no error
-				<-db.mergeSem
 			}
+			// release semaphore when there's no error
+			<-db.mergeSem
 		}()
-
 	default:
-		// merge in-progress or an error occurred
+		// merge already running
 	}
 }
 
@@ -39,7 +39,7 @@ func (db *DB) rolloverSegment(out *mergeOutput) (*segment, error) {
 	// create a new merge segment
 	seg, err := newSegment(db.dir, db.claimNextSegmentID())
 	if err != nil {
-		return nil, fmt.Errorf("create merge segment %q: %w", seg.id, err)
+		return nil, fmt.Errorf("create merge segment: %w", err)
 	}
 
 	out.segments = append(out.segments, seg)
@@ -47,18 +47,20 @@ func (db *DB) rolloverSegment(out *mergeOutput) (*segment, error) {
 }
 
 func (db *DB) merge() error {
-	// start with a new segment. processRecord will add more when needed
+	// we will only merge inactive segments because they are read-only
+	// new segments added during the merge are also out of scope
+	db.rw.RLock()
+	inputLen := len(db.segments) - 1 // leave out last(active) segment
+	db.rw.RUnlock()
+
+	// input segments are decided, run the callback for testing
+	db.onMergeStart()
+
 	out := newMergeOutput()
 	mergeSeg, err := db.rolloverSegment(out)
 	if err != nil {
 		return err // todo errs
 	}
-
-	// we will only merge inactive segments because they are read-only
-	// new segments added during the merge are out of scope
-	db.rw.RLock()
-	inputLen := len(db.segments) - 1 // leave out last(active) segment
-	db.rw.RUnlock()
 
 	for i := 0; i < inputLen; i++ {
 		db.rw.RLock()
@@ -85,8 +87,8 @@ func (db *DB) merge() error {
 
 			// prepare new segment if we grew over the limit
 			// rollover should happen only when there's still
-			// records left
-			if mergeSeg.size > db.segmentSizeMax {
+			// records left, that's why it's before write.
+			if mergeSeg.size >= db.rolloverThreshold {
 				if mergeSeg, err = db.rolloverSegment(out); err != nil {
 					return err
 				}

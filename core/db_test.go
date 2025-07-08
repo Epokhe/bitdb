@@ -228,29 +228,29 @@ func TestOverwriteAfterPartialAppend(t *testing.T) {
 
 func TestSegmentCount(t *testing.T) {
 	const (
-		keys       = 10
-		rounds     = 5 // overwrite each key this many times
-		segSizeMax = 1 * 32
-
-		overhead    = 8 // 4B keyLen + 4B valLen
-		keyLen      = 5 // "k%04d" → 5 chars
-		valLen      = 3 // "xxx"
-		writeLen    = overhead + keyLen + valLen
+		keys        = 10
+		rounds      = 5 // overwrite each key this many times
+		segSizeMax  = 1 * 32
 		totalWrites = keys * rounds
+
+		// calculate the size of a single record
+		overhead = 8 // 4B keyLen + 4B valLen
+		keyLen   = 5 // "k%04d"
+		valLen   = 3 // "xxx"
+		writeLen = overhead + keyLen + valLen
+
+		// With post-write rollover, a segment can fit n writes where the size
+		// after the nth write is the first to be >= the threshold.
+		// The number of writes that fit is floor((threshold-1)/writeLen) + 1.
+		writesPerSeg = (segSizeMax-1)/writeLen + 1
+
+		// The DB starts with 1 segment. A new segment is created after a
+		// rollover is triggered. The number of rollovers is totalWrites / writesPerSeg.
+		expectedSegs = 1 + (totalWrites / writesPerSeg)
 	)
 
-	// post-write rollover lets one write overshoot,
-	// so writesPerSeg = floor(limit/writeLen) + 1
-	writesPerSeg := int(segSizeMax/writeLen) + 1
-	if writesPerSeg < 1 {
-		writesPerSeg = 1
-	}
-
-	// number of segments = ceil(totalWrites / writesPerSeg)
-	expectedSegs := (totalWrites + writesPerSeg - 1) / writesPerSeg
-
 	// open with tiny segment threshold
-	_, db := SetupTempDB(t, WithSegmentSizeMax(int64(segSizeMax)), WithMergeEnabled(false))
+	_, db := SetupTempDB(t, WithRolloverThreshold(int64(segSizeMax)), WithMergeEnabled(false))
 
 	// drive all the writes
 	for r := 0; r < rounds; r++ {
@@ -283,7 +283,7 @@ func TestSegmentCount(t *testing.T) {
 }
 
 func TestGetLatestWinsAcrossSegments(t *testing.T) {
-	_, db := SetupTempDB(t, WithSegmentSizeMax(1), WithMergeEnabled(false)) // force a new segment per write
+	_, db := SetupTempDB(t, WithRolloverThreshold(1), WithMergeEnabled(false)) // force a new segment per write
 
 	_ = db.Set("k", "v1")
 	_ = db.Set("k", "v2")
@@ -295,7 +295,7 @@ func TestGetLatestWinsAcrossSegments(t *testing.T) {
 }
 
 func TestRecoveryAcrossSegmentBoundary(t *testing.T) {
-	dir, db := SetupTempDB(t, WithSegmentSizeMax(16), WithMergeEnabled(false))
+	dir, db := SetupTempDB(t, WithRolloverThreshold(16), WithMergeEnabled(false))
 
 	// ─── SETUP: roll three segments by overwriting the same key ───
 	_ = db.Set("foo", "A")
@@ -310,7 +310,7 @@ func TestRecoveryAcrossSegmentBoundary(t *testing.T) {
 	_ = f.Close()
 
 	// ─── RECOVER: re-open and check that "C" was dropped, so Get returns "B" ───
-	db2, err := Open(dir, WithSegmentSizeMax(16), WithMergeEnabled(false))
+	db2, err := Open(dir, WithRolloverThreshold(16), WithMergeEnabled(false))
 	if err != nil {
 		t.Fatalf("reopen failed: %v", err)
 	}
@@ -330,7 +330,7 @@ func TestRecoveryAcrossSegmentBoundary(t *testing.T) {
 // the value from the segment that appears last in the file, regardless of its
 // numeric id.
 func TestManifestOrderingAffectsWinner(t *testing.T) {
-	dir, db := SetupTempDB(t, WithSegmentSizeMax(1), WithMergeEnabled(false)) // force 1 key per segment
+	dir, db := SetupTempDB(t, WithRolloverThreshold(1), WithMergeEnabled(false)) // force 1 key per segment
 
 	_ = db.Set("k", "old") // seg001
 	_ = db.Set("k", "new") // seg002 (last-writer-wins originally)
@@ -342,7 +342,7 @@ func TestManifestOrderingAffectsWinner(t *testing.T) {
 		t.Fatalf("rewrite manifest: %v", err)
 	}
 
-	reopened, err := Open(dir, WithSegmentSizeMax(db.segmentSizeMax), WithMergeEnabled(false))
+	reopened, err := Open(dir, WithRolloverThreshold(db.rolloverThreshold), WithMergeEnabled(false))
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -361,14 +361,16 @@ func TestEmptyTailSegmentReuse(t *testing.T) {
 	_ = db.Set("a", "1") // seg001 with data
 
 	// Force-create an empty seg002 and *do not* write to it.
-	seg, err := db.addSegment()
+	err := db.addSegment()
 	if err != nil {
 		t.Fatalf("addSegment: %v", err)
 	}
-	empty := getSegmentPath(db.dir, seg.id)
+
+	newSeg := db.segments[len(db.segments)-1]
+	empty := getSegmentPath(db.dir, newSeg.id)
 	_ = db.Close()
 
-	db2, err := Open(dir, WithSegmentSizeMax(db.segmentSizeMax), WithMergeEnabled(false))
+	db2, err := Open(dir, WithRolloverThreshold(db.rolloverThreshold), WithMergeEnabled(false))
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -396,7 +398,7 @@ func TestNextFileNumberSkipsGaps(t *testing.T) {
 	}
 	_ = os.WriteFile(filepath.Join(dir, "MANIFEST"), []byte("5\n9\n"), 0o644)
 
-	db, err := Open(dir, WithSegmentSizeMax(1), WithMergeEnabled(false))
+	db, err := Open(dir, WithRolloverThreshold(1), WithMergeEnabled(false))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
