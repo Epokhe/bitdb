@@ -292,7 +292,7 @@ func TestMergePersistence(t *testing.T) {
 			t.Fatalf("reopen: %v", err)
 		}
 		defer reopened.Close() // nolint:errcheck
-		
+
 		if len(reopened.segments) != len(segs) {
 			t.Fatalf("segment count mismatch after reopen: got %d want %d",
 				len(reopened.segments), len(segs))
@@ -308,6 +308,64 @@ func TestMergePersistence(t *testing.T) {
 			if err != nil || got != want {
 				t.Fatalf("want %s=%s, got %s err=%v", k, want, got, err)
 			}
+		}
+	})
+}
+
+// TestMultipleSequentialMerges triggers several merges and verifies the final
+// segment count matches the mathematical expectation.
+func TestMultipleSequentialMerges(t *testing.T) {
+	synctest.Run(func() {
+		const (
+			// Use a threshold that is more sensitive to write length changes.
+			// With a threshold of 23, a writeLen of 11 results in 3 writes/seg,
+			// while a writeLen of 12 results in 2 writes/seg.
+			rolloverThreshold = 23
+			mergeThreshold    = 2
+			overhead          = 8 // 4B keyLen + 4B valLen
+			keyLen            = 2 // "k1" → 2 chars
+			valLen            = 2 // "v0", "v1", ...
+			writeLen          = overhead + keyLen + valLen
+
+			// With post-write rollover, a segment can fit n writes where the size
+			// after the nth write is the first to be >= the threshold.
+			// The number of writes that fit is floor((threshold-1)/writeLen) + 1.
+			writesPerSeg = (rolloverThreshold-1)/writeLen + 1
+		)
+
+		key := "k1"
+
+		var mergeCount int
+		_, db := SetupTempDB(t,
+			WithRolloverThreshold(rolloverThreshold),
+			WithMergeThreshold(mergeThreshold),
+			WithMergeEnabled(true),
+			WithOnMergeStart(func() { mergeCount++ }),
+		)
+
+		// Create enough writes to trigger multiple merges. We want to end up
+		// creating five segments in total which means four rollovers.
+		const (
+			numSegments = 5
+			totalWrites = writesPerSeg * (numSegments - 1)
+		)
+
+		for i := 0; i < totalWrites; i++ {
+			_ = db.Set(key, fmt.Sprintf("v%d", i))
+			// wait after each rollover so merges can complete one by one
+			if (i+1)%writesPerSeg == 0 {
+				synctest.Wait()
+			}
+		}
+		synctest.Wait()
+
+		expectedMerges := numSegments - mergeThreshold
+		if mergeCount != expectedMerges {
+			t.Fatalf("expected %d merges, got %d", expectedMerges, mergeCount)
+		}
+		// same key getting overwritten should keep inactive segments at 1 length
+		if got := len(db.segments); got != 2 {
+			t.Fatalf("expected 2 segments after merge, got %d", got)
 		}
 	})
 }
