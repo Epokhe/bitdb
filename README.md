@@ -35,5 +35,18 @@ Test with race detector enabled:
 just testrace
 ```
 
-The `justfile` also contains commands for benchmarks and profiling.
+## Benchmarking/profiling
+I'm not doing these on my Mac so I don't wear down my ssd.
 
+Run on hetzner or somewhere else(remember to change TMPDIR as written in justfile)
+```bash
+# Run all benchmarks
+just bench
+```
+
+Profiling works by running benchmarks and opening a server. 
+After running the profiler, just go to $HOST:1730 
+```bash
+# Profile Set
+just profile Benchmark_Set
+```
