@@ -23,7 +23,7 @@ go run ./cmd/client get foo
 
 ## Testing
 
-Use the `justfile` to run tests:
+To run tests:
 
 ```bash
 just test
@@ -33,6 +33,16 @@ Test with race detector enabled:
 
 ```bash
 just testrace
+```
+
+I run tests with race detector by default now.
+
+## Linting
+
+For lint, we use golangci-lint tool. Run with:
+
+```bash
+just lint
 ```
 
 ## Benchmarking/profiling
@@ -50,3 +60,6 @@ After running the profiler, just go to $HOST:1730
 # Profile Set
 just profile Benchmark_Set
 ```
+
+## Pull requests
+We include a clear description of the changes.
