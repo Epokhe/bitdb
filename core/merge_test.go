@@ -6,6 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -431,6 +436,92 @@ func TestMergeAfterTruncatedRecord(t *testing.T) {
 		}
 		if v, err := db.Get("k4"); err != nil || v != "v4" {
 			t.Fatalf("expected k4=v4, got %q, %v", v, err)
+		}
+	})
+}
+
+// TestMergeDeletesOldSegments triggers a merge and verifies that on-disk
+// segment files are replaced with the newly merged ones. It also checks that
+// the MANIFEST lists only the new segment ids.
+func TestMergeDeletesOldSegments(t *testing.T) {
+	synctest.Run(func() {
+		var (
+			before     []string
+			captureErr error
+			wg         sync.WaitGroup
+		)
+
+		// Pause merge so we can snapshot the directory before it runs.
+		wg.Add(1)
+
+		var dir string
+		var db *DB
+		dir, db = SetupTempDB(t,
+			WithRolloverThreshold(20),
+			WithMergeThreshold(2),
+			WithMergeEnabled(true),
+			WithOnMergeStart(func() {
+				var entries []fs.DirEntry
+				entries, captureErr = os.ReadDir(dir)
+				for _, e := range entries {
+					before = append(before, e.Name())
+				}
+				wg.Wait() // hold merge until after snapshot
+			}),
+		)
+
+		// Create two inactive segments then trigger merge.
+		_ = db.Set("k1", "v1")
+		_ = db.Set("k2", "v2") // seg001 rollover
+		_ = db.Set("k3", "v3")
+		_ = db.Set("k4", "v4") // seg002 rollover -> triggers merge
+
+		wg.Done()       // allow merge to continue
+		synctest.Wait() // wait for merge completion
+
+		if captureErr != nil {
+			t.Fatalf("readdir before merge: %v", captureErr)
+		}
+
+		afterEntries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("readdir after merge: %v", err)
+		}
+
+		after := make([]string, 0, len(afterEntries))
+		for _, e := range afterEntries {
+			after = append(after, e.Name())
+		}
+
+		// Expect old segment files to be removed.
+		for _, name := range before {
+			if strings.HasPrefix(name, "seg") {
+				for _, a := range after {
+					if a == name {
+						t.Fatalf("old segment %s still exists after merge", name)
+					}
+				}
+			}
+		}
+
+		// Validate MANIFEST lists the ids of db.segments only.
+		manPath := filepath.Join(dir, "MANIFEST")
+		manBytes, err := os.ReadFile(manPath)
+		if err != nil {
+			t.Fatalf("read manifest: %v", err)
+		}
+
+		manifestIDs := strings.Fields(string(manBytes))
+
+		db.rw.RLock()
+		var wantIDs []string
+		for _, seg := range db.segments {
+			wantIDs = append(wantIDs, fmt.Sprintf("%d", seg.id))
+		}
+		db.rw.RUnlock()
+
+		if !reflect.DeepEqual(manifestIDs, wantIDs) {
+			t.Fatalf("manifest ids %v, want %v", manifestIDs, wantIDs)
 		}
 	})
 }
