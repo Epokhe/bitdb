@@ -3,7 +3,10 @@
 package core
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"testing/synctest"
