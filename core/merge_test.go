@@ -15,7 +15,7 @@ import (
 // then checks we merge when threshold is crossed.
 func TestMergeRunsOnlyWhenThresholdExceeded(t *testing.T) {
 	synctest.Run(func() {
-		_, db := SetupTempDB(t,
+		db, _, _ := SetupTempDB(t,
 			WithRolloverThreshold(20), // multiple records per segment
 			WithMergeThreshold(3),     // start merge after 3 inactive segments
 			WithMergeEnabled(true),
@@ -49,7 +49,7 @@ func TestMergeRunsOnlyWhenThresholdExceeded(t *testing.T) {
 // TestMergeKeepsLatestValue checks last-writer-wins correctness across merge.
 func TestMergeKeepsLatestAndDropsObsolete(t *testing.T) {
 	synctest.Run(func() {
-		_, db := SetupTempDB(t,
+		db, _, _ := SetupTempDB(t,
 			WithRolloverThreshold(20),
 			WithMergeThreshold(2),
 			WithMergeEnabled(true),
@@ -81,7 +81,7 @@ func TestMergeKeepsLatestAndDropsObsolete(t *testing.T) {
 // output segment when the size limit is tiny.
 func TestMergeProducesMultipleSegments(t *testing.T) {
 	synctest.Run(func() {
-		_, db := SetupTempDB(t,
+		db, _, _ := SetupTempDB(t,
 			WithRolloverThreshold(20),
 			WithMergeThreshold(3),
 			WithMergeEnabled(true),
@@ -124,7 +124,7 @@ func TestWritesWhileMerging(t *testing.T) {
 
 		var db *DB
 
-		_, db = SetupTempDB(t,
+		db, _, _ = SetupTempDB(t,
 			WithRolloverThreshold(20),
 			WithMergeThreshold(2), // Merge after 2 inactive segments.
 			WithMergeEnabled(true),
@@ -189,7 +189,7 @@ func TestWritesWhileMerging(t *testing.T) {
 // records each keeps the latest values.
 func TestMergeMultiRecordSegments(t *testing.T) {
 	synctest.Run(func() {
-		_, db := SetupTempDB(t,
+		db, _, _ := SetupTempDB(t,
 			WithRolloverThreshold(20),
 			WithMergeThreshold(3),
 			WithMergeEnabled(true),
@@ -222,7 +222,7 @@ func TestMergeMultiRecordSegments(t *testing.T) {
 // TestMergeDisabled verifies that merges do not run when disabled.
 func TestMergeDisabled(t *testing.T) {
 	synctest.Run(func() {
-		_, db := SetupTempDB(t,
+		db, _, _ := SetupTempDB(t,
 			WithRolloverThreshold(20),
 			WithMergeThreshold(2),
 			WithMergeEnabled(false),
@@ -252,7 +252,7 @@ func TestMergeDisabled(t *testing.T) {
 // TestMergePersistence verifies state is consistent after closing and reopening following a merge.
 func TestMergePersistence(t *testing.T) {
 	synctest.Run(func() {
-		dir, db := SetupTempDB(t,
+		db, dir, _ := SetupTempDB(t,
 			WithRolloverThreshold(20),
 			WithMergeThreshold(3),
 			WithMergeEnabled(true),
@@ -338,7 +338,7 @@ func TestMultipleSequentialMerges(t *testing.T) {
 		key := "k1"
 
 		var mergeCount int
-		_, db := SetupTempDB(t,
+		db, _, _ := SetupTempDB(t,
 			WithRolloverThreshold(rolloverThreshold),
 			WithMergeThreshold(mergeThreshold),
 			WithMergeEnabled(true),
@@ -378,7 +378,7 @@ func TestMergeAfterTruncatedRecord(t *testing.T) {
 	synctest.Run(func() {
 		var db *DB
 
-		_, db = SetupTempDB(t,
+		db, _, _ = SetupTempDB(t,
 			WithRolloverThreshold(20),
 			WithMergeThreshold(2), // Merge after 2 inactive segments.
 			WithMergeEnabled(true),
