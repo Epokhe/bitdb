@@ -395,7 +395,6 @@ func TestMergeAfterTruncatedRecord(t *testing.T) {
 				// The merge is running on segments 1 and 2. Let's truncate seg 1.
 				// seg001 contains k1 and k2. We will truncate it mid-way through k2's record.
 				// Truncate the file by removing the last byte of the last record.
-				// We use the segment's tracked size instead of calling Stat for efficiency.
 				err := db.segments[0].file.Truncate(db.segments[0].size - 1)
 				if err != nil {
 					t.Fatalf("truncate file in callback: %v", err)
@@ -425,10 +424,11 @@ func TestMergeAfterTruncatedRecord(t *testing.T) {
 			t.Fatalf("expected k1=v1, got %q, %v", v, err)
 		}
 
-		// k2, the truncated record, is truncated on disk
-		// but its location lives in the index. We expect an EOF here.
-		if v, err := db.Get("k2"); !errors.Is(err, io.EOF) {
-			t.Fatalf("expected k2 to be lead to EOF, but got value: %q %v", v, err)
+		// k2, the truncated record, did not get included into the merged segment,
+		// but its entry in db.index points to its location in the deleted segment.
+		// So we expect a file closed error when trying to call seg.file.Read
+		if v, err := db.Get("k2"); !errors.Is(err, fs.ErrClosed) {
+			t.Fatalf("expected k2 to lead to file closed error, but got value: %q %v", v, err)
 		}
 		// k3 and k4 from the other, healthy segment should be present.
 		if v, err := db.Get("k3"); err != nil || v != "v3" {
