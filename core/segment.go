@@ -197,13 +197,13 @@ func (rs *recordScanner) scan() bool {
 
 	// read the key/value length
 	if _, err := io.ReadFull(reader, hdr); err != nil {
-		// this is the happy path of exiting the loop
-		// we should never have EOF after this, that would mean partially
-		// written records i.e. corruption
 		if !isEOF(err) {
 			rs.err = fmt.Errorf("read key/val length: %w", err)
 		}
 
+		// this is the happy path of exiting the loop
+		// we should not have EOF after this, that would mean partially
+		// written records i.e. corruption
 		return false
 	}
 	keyLen := int(binary.LittleEndian.Uint32(hdr[0:4]))
@@ -212,24 +212,24 @@ func (rs *recordScanner) scan() bool {
 	// read the key payload
 	keyBytes := make([]byte, keyLen)
 	if _, err := io.ReadFull(reader, keyBytes); err != nil {
-		// EOF here means partially written key i.e. corruption
-		// we bail out here, we're just ignoring the partially written key
 		if !isEOF(err) {
 			rs.err = fmt.Errorf("read key: %w", err)
 		}
 
+		// EOF here means partially written key i.e. corruption
+		// we bail out here, we're just ignoring the partially written key
 		return false
 	}
 
 	// read the value payload
 	valBytes := make([]byte, valLen)
 	if _, err := io.ReadFull(reader, valBytes); err != nil {
-		// EOF here means partially written value i.e. corruption
-		// we bail out here, we're just ignoring the partially written value
 		if !isEOF(err) {
 			rs.err = fmt.Errorf("read value: %w", err)
 		}
 
+		// EOF here means partially written value i.e. corruption
+		// we bail out here, we're just ignoring the partially written value
 		return false
 	}
 
@@ -246,11 +246,12 @@ func (rs *recordScanner) scan() bool {
 	//  per key to read the value!
 	//// skip value payload because we don't need it on the index
 	//if _, err := io.CopyN(io.Discard, reader, int64(valLen)); err != nil {
-	//	// EOF here means partially written value i.e. corruption
-	//	// we bail out here, we're just ignoring the partially written value
 	//	if err == io.EOF || errors.Is(err, io.ErrUnexpectedEOF) {
 	//		break
 	//	}
+	//
+	//	// EOF here means partially written value i.e. corruption
+	//	// we bail out here, we're just ignoring the partially written value
 	//	return 0, err
 	//}
 
