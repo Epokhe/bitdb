@@ -56,6 +56,7 @@ func (db *DB) merge() error {
 	// input segments are decided, run the callback for testing
 	db.onMergeStart()
 
+	// todo on merge fail, remove half written merge segments
 	out := newMergeOutput()
 	mergeSeg, err := db.rolloverSegment(out)
 	if err != nil {
@@ -104,6 +105,10 @@ func (db *DB) merge() error {
 				seg:    mergeSeg,
 				offset: off,
 			}
+		}
+
+		if err = rs.err; err != nil {
+			return err
 		}
 	}
 

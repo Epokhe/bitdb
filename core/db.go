@@ -268,8 +268,9 @@ func (db *DB) Get(key string) (string, error) {
 
 	val, err := db.readValueAt(loc)
 	if err != nil {
-		// this is an unexpected error, because if key is on index,
-		// its corresponding value should exist on the disk file
+		// this is an unexpected error, because in normal operation,
+		// if key is on index, its corresponding value should exist on the disk file
+		// this implies possible file corruption
 		return "", fmt.Errorf("db.readValueAt recordLocation%+v: %w", loc, err)
 	}
 

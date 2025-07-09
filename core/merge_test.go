@@ -3,7 +3,9 @@
 package core
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -366,6 +368,69 @@ func TestMultipleSequentialMerges(t *testing.T) {
 		// same key getting overwritten should keep inactive segments at 1 length
 		if got := len(db.segments); got != 2 {
 			t.Fatalf("expected 2 segments after merge, got %d", got)
+		}
+	})
+}
+
+// TestMergeAfterTruncatedRecord verifies that the merge process can gracefully
+// handle a truncated segment file.
+func TestMergeAfterTruncatedRecord(t *testing.T) {
+	synctest.Run(func() {
+		var db *DB
+
+		_, db = SetupTempDB(t,
+			WithRolloverThreshold(20),
+			WithMergeThreshold(2), // Merge after 2 inactive segments.
+			WithMergeEnabled(true),
+			WithOnMergeStart(func() {
+				// This callback runs synchronously at the start of a merge.
+				// It provides a race-free window to corrupt a segment file
+				// before the merge's recordScanner begins reading it.
+
+				// The merge is running on segments 1 and 2. Let's truncate seg 1.
+				// seg001 contains k1 and k2. We will truncate it mid-way through k2's record.
+				// Truncate the file by removing the last byte of the last record.
+				// We use the segment's tracked size instead of calling Stat for efficiency.
+				err := db.segments[0].file.Truncate(db.segments[0].size - 1)
+				if err != nil {
+					t.Fatalf("truncate file in callback: %v", err)
+				}
+			}),
+		)
+
+		// Create two inactive segments (seg 1, seg 2).
+		// Each Set adds 12 bytes. Rollover is at 20.
+		_ = db.Set("k1", "v1")
+		_ = db.Set("k2", "v2") // seg1 rolls over.
+		_ = db.Set("k3", "v3")
+		_ = db.Set("k4", "v4") // seg2 rolls over, triggers merge.
+
+		// Wait for the merge process (including the hook) to complete.
+		synctest.Wait()
+
+		// The merge should complete without propagating an error.
+		select {
+		case err := <-db.MergeErrors():
+			t.Fatalf("unexpected merge error: %v", err)
+		default:
+		}
+
+		// k1 from the truncated segment should be present.
+		if v, err := db.Get("k1"); err != nil || v != "v1" {
+			t.Fatalf("expected k1=v1, got %q, %v", v, err)
+		}
+
+		// k2, the truncated record, is truncated on disk
+		// but its location lives in the index. We expect an EOF here.
+		if v, err := db.Get("k2"); !errors.Is(err, io.EOF) {
+			t.Fatalf("expected k2 to be lead to EOF, but got value: %q %v", v, err)
+		}
+		// k3 and k4 from the other, healthy segment should be present.
+		if v, err := db.Get("k3"); err != nil || v != "v3" {
+			t.Fatalf("expected k3=v3, got %q, %v", v, err)
+		}
+		if v, err := db.Get("k4"); err != nil || v != "v4" {
+			t.Fatalf("expected k4=v4, got %q, %v", v, err)
 		}
 	})
 }
