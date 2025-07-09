@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func SetupTempDB(tb testing.TB, dbOpts ...Option) (path string, db *DB) {
+func SetupTempDB(tb testing.TB, dbOpts ...Option) (db *DB, path string, cleanup func()) {
 	// make a temp dir
 	path, err := os.MkdirTemp("", "kvdb_test_*")
 	if err != nil {
@@ -20,11 +20,13 @@ func SetupTempDB(tb testing.TB, dbOpts ...Option) (path string, db *DB) {
 		tb.Fatalf("Open(%q) failed: %v", path, err)
 	}
 
-	// On cleanup, close DB then delete file
-	tb.Cleanup(func() {
+	cleanup = func() {
 		_ = db.Close()
 		_ = os.RemoveAll(path)
-	})
+	}
 
-	return path, db
+	// On cleanup, close DB then delete file
+	tb.Cleanup(cleanup)
+
+	return db, path, cleanup
 }
