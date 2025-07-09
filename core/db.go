@@ -1,4 +1,4 @@
-// Package core provides the core LSM-Tree implementation.
+// Package core provides the core BitDB implementation.
 package core
 
 import (

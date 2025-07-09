@@ -1,4 +1,3 @@
-// Package core provides the core LSM-Tree implementation.
 package core
 
 import (

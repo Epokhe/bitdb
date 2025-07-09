@@ -6,8 +6,6 @@ import (
 )
 
 func SetupTempDB(tb testing.TB, dbOpts ...Option) (path string, db *DB) {
-	tb.Helper()
-
 	// make a temp dir
 	path, err := os.MkdirTemp("", "kvdb_test_*")
 	if err != nil {
