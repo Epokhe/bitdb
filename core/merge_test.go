@@ -447,6 +447,7 @@ func TestMergeDeletesOldSegments(t *testing.T) {
 	synctest.Run(func() {
 		var (
 			before     []string
+			oldSegs    []string
 			captureErr error
 			wg         sync.WaitGroup
 		)
@@ -466,6 +467,14 @@ func TestMergeDeletesOldSegments(t *testing.T) {
 				for _, e := range entries {
 					before = append(before, e.Name())
 				}
+
+				// old segments are all but the last(active) one
+				db.rw.RLock()
+				for _, seg := range db.segments[:len(db.segments)-1] {
+					oldSegs = append(oldSegs, fmt.Sprintf("seg%03d", seg.id))
+				}
+				db.rw.RUnlock()
+
 				wg.Wait() // hold merge until after snapshot
 			}),
 		)
@@ -494,12 +503,10 @@ func TestMergeDeletesOldSegments(t *testing.T) {
 		}
 
 		// Expect old segment files to be removed.
-		for _, name := range before {
-			if strings.HasPrefix(name, "seg") {
-				for _, a := range after {
-					if a == name {
-						t.Fatalf("old segment %s still exists after merge", name)
-					}
+		for _, oldName := range oldSegs {
+			for _, a := range after {
+				if a == oldName {
+					t.Fatalf("old segment %s still exists after merge", oldName)
 				}
 			}
 		}

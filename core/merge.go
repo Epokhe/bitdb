@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"os"
 )
 
 type mergeOutput struct {
@@ -126,6 +127,9 @@ func (db *DB) merge() error {
 	db.rw.Lock()
 	defer db.rw.Unlock()
 
+	// segments to remove after successful merge
+	oldSegs := db.segments[:inputLen]
+
 	// merged segments replace their corresponding `inputLen` counterpart
 	// and un-merged segments are appended
 	db.segments = append(out.segments, db.segments[inputLen:]...)
@@ -137,6 +141,12 @@ func (db *DB) merge() error {
 
 	if err := db.overwriteManifest(); err != nil {
 		return fmt.Errorf("overwriteManifest: %w", err)
+	}
+
+	// remove old segment files; ignore errors on best-effort basis
+	for _, seg := range oldSegs {
+		_ = seg.file.Close()
+		_ = os.Remove(getSegmentPath(db.dir, seg.id))
 	}
 
 	return nil
