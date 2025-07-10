@@ -2,6 +2,8 @@ package core
 
 import (
 	"fmt"
+	"log"
+	"os"
 )
 
 type mergeOutput struct {
@@ -51,6 +53,7 @@ func (db *DB) merge() error {
 	// new segments added during the merge are also out of scope
 	db.rw.RLock()
 	inputLen := len(db.segments) - 1 // leave out last(active) segment
+	toMerge := db.segments[:inputLen]
 	db.rw.RUnlock()
 
 	// input segments are decided, run the callback for testing
@@ -63,11 +66,7 @@ func (db *DB) merge() error {
 		return err // todo errs
 	}
 
-	for i := 0; i < inputLen; i++ {
-		db.rw.RLock()
-		seg := db.segments[i]
-		db.rw.RUnlock()
-
+	for _, seg := range toMerge {
 		rs := newRecordScanner(seg)
 		for rs.scan() {
 			rec := rs.record
@@ -137,6 +136,17 @@ func (db *DB) merge() error {
 
 	if err := db.overwriteManifest(); err != nil {
 		return fmt.Errorf("overwriteManifest: %w", err)
+	}
+
+	// remove old segment files; ignore and log the errors
+	for _, seg := range toMerge {
+		if err := seg.file.Close(); err != nil {
+			log.Printf("file close: %v", err)
+		}
+
+		if err := os.Remove(getSegmentPath(db.dir, seg.id)); err != nil {
+			log.Printf("os.remove: %v", err)
+		}
 	}
 
 	return nil

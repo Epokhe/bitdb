@@ -5,7 +5,11 @@ package core
 import (
 	"errors"
 	"fmt"
-	"io"
+	mapset "github.com/deckarep/golang-set/v2"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -390,7 +394,6 @@ func TestMergeAfterTruncatedRecord(t *testing.T) {
 				// The merge is running on segments 1 and 2. Let's truncate seg 1.
 				// seg001 contains k1 and k2. We will truncate it mid-way through k2's record.
 				// Truncate the file by removing the last byte of the last record.
-				// We use the segment's tracked size instead of calling Stat for efficiency.
 				err := db.segments[0].file.Truncate(db.segments[0].size - 1)
 				if err != nil {
 					t.Fatalf("truncate file in callback: %v", err)
@@ -420,10 +423,11 @@ func TestMergeAfterTruncatedRecord(t *testing.T) {
 			t.Fatalf("expected k1=v1, got %q, %v", v, err)
 		}
 
-		// k2, the truncated record, is truncated on disk
-		// but its location lives in the index. We expect an EOF here.
-		if v, err := db.Get("k2"); !errors.Is(err, io.EOF) {
-			t.Fatalf("expected k2 to be lead to EOF, but got value: %q %v", v, err)
+		// k2, the truncated record, did not get included into the merged segment,
+		// but its entry in db.index points to its location in the deleted segment.
+		// So we expect a file closed error when trying to call seg.file.Read
+		if v, err := db.Get("k2"); !errors.Is(err, fs.ErrClosed) {
+			t.Fatalf("expected k2 to lead to file closed error, but got value: %q %v", v, err)
 		}
 		// k3 and k4 from the other, healthy segment should be present.
 		if v, err := db.Get("k3"); err != nil || v != "v3" {
@@ -431,6 +435,102 @@ func TestMergeAfterTruncatedRecord(t *testing.T) {
 		}
 		if v, err := db.Get("k4"); err != nil || v != "v4" {
 			t.Fatalf("expected k4=v4, got %q, %v", v, err)
+		}
+	})
+}
+
+// TestMergeDeletesOldSegments triggers a merge and verifies that on-disk
+// segment files are replaced with the newly merged ones. It also checks that
+// the MANIFEST lists only the new segment ids.
+func TestMergeDeletesOldSegments(t *testing.T) {
+	synctest.Run(func() {
+		var captureErr error
+		var wg sync.WaitGroup
+
+		filesBefore := mapset.NewSet[string]()
+		segsBefore := mapset.NewSet[string]()
+
+		// Pause merge so we can snapshot the directory before it runs.
+		wg.Add(1)
+
+		var dir string
+		var db *DB
+		dir, db = SetupTempDB(t,
+			WithRolloverThreshold(20),
+			WithMergeThreshold(2),
+			WithMergeEnabled(true),
+			WithOnMergeStart(func() {
+				var entries []fs.DirEntry
+				entries, captureErr = os.ReadDir(dir)
+				for _, e := range entries {
+					filesBefore.Add(e.Name())
+				}
+
+				// get the segments that will be merged
+				db.rw.RLock()
+				for _, seg := range db.segments[:len(db.segments)-1] {
+					// seg001, seg002, seg003
+					segsBefore.Add(fmt.Sprintf("seg%03d", seg.id))
+				}
+				db.rw.RUnlock()
+
+				wg.Wait() // hold merge until after snapshot
+			}),
+		)
+
+		// Create two inactive segments then trigger merge.
+		_ = db.Set("k1", "v1")
+		_ = db.Set("k2", "v2") // seg001 rollover
+		_ = db.Set("k3", "v3")
+		_ = db.Set("k4", "v4") // seg002 rollover -> triggers merge
+
+		wg.Done()       // allow merge to continue
+		synctest.Wait() // wait for merge completion
+
+		if captureErr != nil {
+			t.Fatalf("readdir before merge: %v", captureErr)
+		}
+
+		afterEntries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("readdir after merge: %v", err)
+		}
+
+		filesAfter := mapset.NewSet[string]()
+		for _, e := range afterEntries {
+			filesAfter.Add(e.Name())
+		}
+
+		// sanity check: to-merge segments must have their files in the directory
+		if res := segsBefore.Difference(filesBefore); res.Cardinality() != 0 {
+			t.Fatalf("segment files before merge not found: %v", res)
+		}
+
+		// files of the merged segments should not exist after the merge
+		if res := segsBefore.Intersect(filesAfter); res.Cardinality() != 0 {
+			t.Fatalf("old segment files still exist after merge: %v", res)
+		}
+
+		// Validate MANIFEST lists the ids of updated db.segments only.
+		manPath := filepath.Join(dir, "MANIFEST")
+		manBytes, err := os.ReadFile(manPath)
+		if err != nil {
+			t.Fatalf("read manifest: %v", err)
+		}
+
+		// parse manifest ids to a set
+		manIDs := mapset.NewSet(strings.Fields(string(manBytes))...)
+
+		// get the updated db.segments
+		wantIDs := mapset.NewSet[string]()
+		db.rw.RLock()
+		for _, seg := range db.segments {
+			wantIDs.Add(fmt.Sprintf("%d", seg.id))
+		}
+		db.rw.RUnlock()
+
+		if !manIDs.Equal(wantIDs) {
+			t.Fatalf("manifest ids %v, want %v", manIDs, wantIDs)
 		}
 	})
 }
