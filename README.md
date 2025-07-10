@@ -46,6 +46,8 @@ just lint
 ```
 
 ## Benchmarking/profiling
+Results are on BENCHMARKS.md
+
 I'm not doing these on my Mac so I don't wear down my ssd.
 
 Run on hetzner or somewhere else(remember to change TMPDIR as written in justfile)
