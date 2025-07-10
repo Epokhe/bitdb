@@ -140,11 +140,11 @@ func (db *DB) merge() error {
 	// remove old segment files; ignore and log the errors
 	for _, seg := range toMerge {
 		if err := seg.file.Close(); err != nil {
-			log.Printf("file close: %v", err)
+			log.Printf("error removing old segments: file close: %v", err)
 		}
 
 		if err := os.Remove(getSegmentPath(db.dir, seg.id)); err != nil {
-			log.Printf("os.remove: %v", err)
+			log.Printf("error removing old segments: os.remove: %v", err)
 		}
 	}
 
