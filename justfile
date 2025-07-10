@@ -6,11 +6,16 @@ tempdir := env("BITDB_TMPDIR", "/tmp")
 
 # Run all tests (or single tests via -run in ARGS)
 test *ARGS:
-    TMPDIR={{tempdir}} go test {{ARGS}} ./core/
+    TMPDIR={{tempdir}} GOEXPERIMENT=synctest go test {{ARGS}} ./core/
 
-# Run with race detector + synctest (again, single tests via -run)
+# Run with race detector (again, single tests via -run)
 testrace *ARGS:
     TMPDIR={{tempdir}} GOEXPERIMENT=synctest go test -race {{ARGS}} ./core/
+
+# Generate test coverage report and open in browser
+coverage:
+    TMPDIR={{tempdir}} GOEXPERIMENT=synctest go test -coverprofile=coverage.out ./core/
+    go tool cover -html=coverage.out
 
 # run benchmarks
 bench *ARGS:
