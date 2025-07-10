@@ -534,3 +534,77 @@ func TestMergeDeletesOldSegments(t *testing.T) {
 		}
 	})
 }
+
+func TestMergeRollbackOnError(t *testing.T) {
+	synctest.Run(func() {
+		var dir string
+		var db *DB
+		db, dir, _ = SetupTempDB(t,
+			WithRolloverThreshold(20),
+			WithMergeThreshold(2),
+			WithMergeEnabled(true),
+			WithOnMergeStart(func() {
+				// Close the first segment file so scanning fails mid-merge
+				if err := db.segments[0].file.Close(); err != nil {
+					t.Fatalf("close segment: %v", err)
+				}
+			}),
+		)
+
+		// Create two inactive segments then trigger merge.
+		_ = db.Set("k1", "v1")
+		_ = db.Set("k2", "v2") // seg001 rollover
+		_ = db.Set("k3", "v3")
+		_ = db.Set("k4", "v4") // seg002 rollover -> triggers merge
+
+		// Record pre-merge segment ids.
+		db.rw.RLock()
+		wantIDs := make([]int, len(db.segments))
+		for i, seg := range db.segments {
+			wantIDs[i] = seg.id
+		}
+		db.rw.RUnlock()
+
+		synctest.Wait() // wait for merge attempt
+
+		var mergeErr error
+		select {
+		case mergeErr = <-db.MergeErrors():
+		default:
+			t.Fatalf("expected merge error but none")
+		}
+		if mergeErr == nil {
+			t.Fatalf("merge error nil")
+		}
+
+		// Ensure segments unchanged.
+		db.rw.RLock()
+		if len(db.segments) != len(wantIDs) {
+			db.rw.RUnlock()
+			t.Fatalf("segment count changed: got %d want %d", len(db.segments), len(wantIDs))
+		}
+		for i, seg := range db.segments {
+			if seg.id != wantIDs[i] {
+				db.rw.RUnlock()
+				t.Fatalf("segment id %d changed: got %d want %d", i, seg.id, wantIDs[i])
+			}
+		}
+		db.rw.RUnlock()
+
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("readdir: %v", err)
+		}
+		files := mapset.NewSet[string]()
+		for _, e := range entries {
+			files.Add(e.Name())
+		}
+		wantFiles := mapset.NewSet[string]("MANIFEST")
+		for _, id := range wantIDs {
+			wantFiles.Add(fmt.Sprintf("seg%03d", id))
+		}
+		if !files.Equal(wantFiles) {
+			t.Fatalf("unexpected files after failed merge: %v, want %v", files, wantFiles)
+		}
+	})
+}
