@@ -544,9 +544,9 @@ func TestMergeRollbackOnError(t *testing.T) {
 			WithMergeThreshold(2),
 			WithMergeEnabled(true),
 			WithOnMergeStart(func() {
-				// Rename the directory so merge cannot create new segments.
-				if err := os.Rename(dir, dir+"_tmp"); err != nil {
-					t.Fatalf("rename dir: %v", err)
+				// Close the first segment file so scanning fails mid-merge
+				if err := db.segments[0].file.Close(); err != nil {
+					t.Fatalf("close segment: %v", err)
 				}
 			}),
 		)
@@ -566,9 +566,6 @@ func TestMergeRollbackOnError(t *testing.T) {
 		db.rw.RUnlock()
 
 		synctest.Wait() // wait for merge attempt
-
-		// rename directory back so cleanup works
-		_ = os.Rename(dir+"_tmp", dir)
 
 		var mergeErr error
 		select {

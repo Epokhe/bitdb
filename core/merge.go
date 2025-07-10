@@ -48,7 +48,7 @@ func (db *DB) rolloverSegment(out *mergeOutput) (*segment, error) {
 	return seg, nil
 }
 
-func (db *DB) merge() error {
+func (db *DB) merge() (rerr error) {
 	// we will only merge inactive segments because they are read-only
 	// new segments added during the merge are also out of scope
 	db.rw.RLock()
@@ -60,6 +60,15 @@ func (db *DB) merge() error {
 	db.onMergeStart()
 
 	out := newMergeOutput()
+	defer func() {
+		if rerr != nil {
+			for _, seg := range out.segments {
+				_ = seg.file.Close()
+				_ = os.Remove(getSegmentPath(db.dir, seg.id))
+			}
+		}
+	}()
+
 	mergeSeg, err := db.rolloverSegment(out)
 	if err != nil {
 		return err // todo errs
