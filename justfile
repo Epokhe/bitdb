@@ -13,7 +13,7 @@ testrace *ARGS:
     TMPDIR={{tempdir}} GOEXPERIMENT=synctest go test -race {{ARGS}} ./core/
 
 # Generate test coverage report and open in browser
-coverage:
+cover:
     TMPDIR={{tempdir}} GOEXPERIMENT=synctest go test -coverprofile=coverage.out ./core/
     go tool cover -html=coverage.out
 
