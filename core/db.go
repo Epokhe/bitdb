@@ -85,6 +85,7 @@ func Open(dir string, opts ...Option) (*DB, error) {
 		opt(db)
 	}
 
+	// todo use named return variable instead
 	// DO NOT SHADOW err so defer does not miss it
 	var err error
 
