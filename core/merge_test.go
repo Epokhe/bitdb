@@ -5,11 +5,10 @@ package core
 import (
 	"errors"
 	"fmt"
-	"io"
+	mapset "github.com/deckarep/golang-set/v2"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -445,12 +444,11 @@ func TestMergeAfterTruncatedRecord(t *testing.T) {
 // the MANIFEST lists only the new segment ids.
 func TestMergeDeletesOldSegments(t *testing.T) {
 	synctest.Run(func() {
-		var (
-			before     []string
-			oldSegs    []string
-			captureErr error
-			wg         sync.WaitGroup
-		)
+		var captureErr error
+		var wg sync.WaitGroup
+
+		filesBefore := mapset.NewSet[string]()
+		segsBefore := mapset.NewSet[string]()
 
 		// Pause merge so we can snapshot the directory before it runs.
 		wg.Add(1)
@@ -465,13 +463,14 @@ func TestMergeDeletesOldSegments(t *testing.T) {
 				var entries []fs.DirEntry
 				entries, captureErr = os.ReadDir(dir)
 				for _, e := range entries {
-					before = append(before, e.Name())
+					filesBefore.Add(e.Name())
 				}
 
-				// old segments are all but the last(active) one
+				// get the segments that will be merged
 				db.rw.RLock()
 				for _, seg := range db.segments[:len(db.segments)-1] {
-					oldSegs = append(oldSegs, fmt.Sprintf("seg%03d", seg.id))
+					// seg001, seg002, seg003
+					segsBefore.Add(fmt.Sprintf("seg%03d", seg.id))
 				}
 				db.rw.RUnlock()
 
@@ -497,38 +496,41 @@ func TestMergeDeletesOldSegments(t *testing.T) {
 			t.Fatalf("readdir after merge: %v", err)
 		}
 
-		after := make([]string, 0, len(afterEntries))
+		filesAfter := mapset.NewSet[string]()
 		for _, e := range afterEntries {
-			after = append(after, e.Name())
+			filesAfter.Add(e.Name())
 		}
 
-		// Expect old segment files to be removed.
-		for _, oldName := range oldSegs {
-			for _, a := range after {
-				if a == oldName {
-					t.Fatalf("old segment %s still exists after merge", oldName)
-				}
-			}
+		// sanity check: to-merge segments must have their files in the directory
+		if res := segsBefore.Difference(filesBefore); res.Cardinality() != 0 {
+			t.Fatalf("segment files before merge not found: %v", res)
 		}
 
-		// Validate MANIFEST lists the ids of db.segments only.
+		// files of the merged segments should not exist after the merge
+		if res := segsBefore.Intersect(filesAfter); res.Cardinality() != 0 {
+			t.Fatalf("old segment files still exist after merge: %v", res)
+		}
+
+		// Validate MANIFEST lists the ids of updated db.segments only.
 		manPath := filepath.Join(dir, "MANIFEST")
 		manBytes, err := os.ReadFile(manPath)
 		if err != nil {
 			t.Fatalf("read manifest: %v", err)
 		}
 
-		manifestIDs := strings.Fields(string(manBytes))
+		// parse manifest ids to a set
+		manIDs := mapset.NewSet(strings.Fields(string(manBytes))...)
 
+		// get the updated db.segments
+		wantIDs := mapset.NewSet[string]()
 		db.rw.RLock()
-		var wantIDs []string
 		for _, seg := range db.segments {
-			wantIDs = append(wantIDs, fmt.Sprintf("%d", seg.id))
+			wantIDs.Add(fmt.Sprintf("%d", seg.id))
 		}
 		db.rw.RUnlock()
 
-		if !reflect.DeepEqual(manifestIDs, wantIDs) {
-			t.Fatalf("manifest ids %v, want %v", manifestIDs, wantIDs)
+		if !manIDs.Equal(wantIDs) {
+			t.Fatalf("manifest ids %v, want %v", manIDs, wantIDs)
 		}
 	})
 }
