@@ -455,7 +455,7 @@ func TestMergeDeletesOldSegments(t *testing.T) {
 
 		var dir string
 		var db *DB
-		dir, db = SetupTempDB(t,
+		db, dir, _ = SetupTempDB(t,
 			WithRolloverThreshold(20),
 			WithMergeThreshold(2),
 			WithMergeEnabled(true),
