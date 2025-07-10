@@ -2,16 +2,21 @@
 package core
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/deckarep/golang-set/v2"
 )
 
 // todo merge configuration under one struct
@@ -30,6 +35,7 @@ type DB struct {
 	rolloverThreshold     int64                      // rollover segment when the active segment reaches this
 	segmentMergeThreshold int                        // run merge when inactive(merge-able) segment count reaches this
 	onMergeStart          func()                     // test hook
+	// todo consider switching to channel based signaling on merge start
 }
 
 var ErrKeyNotFound = errors.New("key not found")
@@ -98,18 +104,27 @@ func Open(dir string, opts ...Option) (*DB, error) {
 		return nil, fmt.Errorf("ensuremanifest: %w", err)
 	}
 
-	// load all segments according to manifest file
-	var maxID int
-	scanner := bufio.NewScanner(db.manifest)
-	for scanner.Scan() {
-		var segID int
-		segID, _ = strconv.Atoi(scanner.Text())
+	// we will load the segments ordered by the manifest file
+	mnfBytes, err := io.ReadAll(db.manifest)
+	if err != nil {
+		return nil, fmt.Errorf("read manifest: %w", err)
+	}
 
+	// parse the manifest and get segment ids
+	mnfIds := strings.Fields(string(mnfBytes))
+	var segIds []int
+	for _, idStr := range mnfIds {
+		id, _ := strconv.Atoi(idStr) // don't expect an error
+		segIds = append(segIds, id)
+	}
+
+	// load all segments according to parsed manifest
+	for _, id := range segIds {
 		var seg *segment
 		var keyOffs []keyOffset
-		seg, keyOffs, err = parseSegment(db.dir, segID)
+		seg, keyOffs, err = parseSegment(db.dir, id)
 		if err != nil {
-			return nil, fmt.Errorf("loadsegment %q: %w", segID, err)
+			return nil, fmt.Errorf("loadsegment %q: %w", id, err)
 		}
 
 		// update db index with the returned offsets
@@ -118,19 +133,18 @@ func Open(dir string, opts ...Option) (*DB, error) {
 		}
 
 		db.segments = append(db.segments, seg)
-
-		// also, compute max segment id so we can set the counter
-		if segID > maxID {
-			maxID = segID
-		}
-	}
-
-	if err = scanner.Err(); err != nil {
-		return nil, fmt.Errorf("scan: %w", err)
 	}
 
 	// set the segment id counter
-	db.idCtr = int64(maxID + 1)
+	maxId := 0
+	if len(segIds) > 0 {
+		maxId = slices.Max(segIds)
+	}
+	db.idCtr = int64(maxId + 1)
+
+	if err = db.checkOrphanedSegments(segIds); err != nil {
+		return nil, fmt.Errorf("cleanup orphaned segments: %w", err)
+	}
 
 	// in case this is a new folder, we create the empty segment
 	if len(db.segments) == 0 {
@@ -190,7 +204,7 @@ func getSegmentPath(dir string, id int) string {
 	return filepath.Join(dir, fmt.Sprintf("seg%03d", id))
 }
 
-func (db *DB) claimNextSegmentID() int {
+func (db *DB) claimNextSegmentId() int {
 	// We atomically increment and return the previous value so callers always
 	// get a unique id even under concurrency without needing external locks.
 	return int(atomic.AddInt64(&db.idCtr, 1) - 1)
@@ -199,7 +213,7 @@ func (db *DB) claimNextSegmentID() int {
 // creates an empty segment and appends it to the segment list.
 // Changes the writer so new data is written to this segment.
 func (db *DB) addSegment() error {
-	seg, err := newSegment(db.dir, db.claimNextSegmentID())
+	seg, err := newSegment(db.dir, db.claimNextSegmentId())
 	if err != nil {
 		return fmt.Errorf("create new segment: %w", err)
 	}
@@ -354,4 +368,37 @@ func (db *DB) DiskSize() (int64, error) {
 		total += info.Size()
 	}
 	return total, nil
+}
+
+// We check orphaned segments in case a power loss occurred during a merge operation
+func (db *DB) checkOrphanedSegments(segIds []int) error {
+	// scan directory for segment files
+	entries, err := os.ReadDir(db.dir)
+	if err != nil {
+		return fmt.Errorf("read dir: %w", err)
+	}
+
+	// segment ids in the manifest
+	expected := mapset.NewSet[string]()
+	for _, id := range segIds {
+		// seg001, seg002, ...
+		expected.Add(fmt.Sprintf("seg%03d", id))
+	}
+
+	// actual segment files
+	actual := mapset.NewSet[string]()
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || name[:3] != "seg" {
+			continue
+		}
+
+		actual.Add(name)
+	}
+
+	if res := actual.Difference(expected); res.Cardinality() != 0 {
+		log.Printf("warning: orphaned segments exist: %v", res)
+	}
+
+	return nil
 }

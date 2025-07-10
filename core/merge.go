@@ -39,7 +39,7 @@ func (db *DB) MergeErrors() <-chan error { return db.mergeErr }
 
 func (db *DB) rolloverSegment(out *mergeOutput) (*segment, error) {
 	// create a new merge segment
-	seg, err := newSegment(db.dir, db.claimNextSegmentID())
+	seg, err := newSegment(db.dir, db.claimNextSegmentId())
 	if err != nil {
 		return nil, fmt.Errorf("create merge segment: %w", err)
 	}

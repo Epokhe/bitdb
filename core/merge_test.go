@@ -179,7 +179,7 @@ func TestWritesWhileMerging(t *testing.T) {
 			t.Fatalf("expected 4 segments without merge, got %d", got)
 		}
 
-		// Verify that only ONE merge ran by checking the final segment IDs.
+		// Verify that only ONE merge ran by checking the final segment ids.
 		want := []int{6, 3, 4, 5}
 		for i, seg := range db.segments {
 			if seg.id != want[i] {
@@ -519,18 +519,18 @@ func TestMergeDeletesOldSegments(t *testing.T) {
 		}
 
 		// parse manifest ids to a set
-		manIDs := mapset.NewSet(strings.Fields(string(manBytes))...)
+		manIds := mapset.NewSet(strings.Fields(string(manBytes))...)
 
 		// get the updated db.segments
-		wantIDs := mapset.NewSet[string]()
+		wantIds := mapset.NewSet[string]()
 		db.rw.RLock()
 		for _, seg := range db.segments {
-			wantIDs.Add(fmt.Sprintf("%d", seg.id))
+			wantIds.Add(fmt.Sprintf("%d", seg.id))
 		}
 		db.rw.RUnlock()
 
-		if !manIDs.Equal(wantIDs) {
-			t.Fatalf("manifest ids %v, want %v", manIDs, wantIDs)
+		if !manIds.Equal(wantIds) {
+			t.Fatalf("manifest ids %v, want %v", manIds, wantIds)
 		}
 	})
 }
