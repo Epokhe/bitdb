@@ -114,8 +114,8 @@ func TestTruncatedHeader(t *testing.T) {
 	// Manually write a valid record + only half of the next header
 	f, _ := os.Create(filepath.Join(dir, "seg001"))
 	// header+key+val of ("x"→"y")
-	_, _ = f.Write([]byte("\x01\x00\x00\x00\x01\x00\x00\x00xy"))
-	// now write only 2 of the next 8 header bytes
+	_, _ = f.Write([]byte{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 'x', 'y'})
+	// now write only 2 of the next 10 header bytes
 	_, _ = f.Write([]byte{0x02, 0x00})
 	_ = f.Close()
 
@@ -124,21 +124,27 @@ func TestTruncatedHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open on truncated header: %v", err)
 	}
+
+	// good record should be indexed
 	if val, err := db.Get("x"); err != nil || val != "y" {
 		t.Errorf("expected x→y, got %q, %v", val, err)
 	}
 
-	if _, err = db.Get("<garbage>"); !errors.Is(err, ErrKeyNotFound) {
-		t.Errorf("expected missing key, got %v", err)
+	// second key should not be indexed
+	if len(db.index) != 1 {
+		t.Errorf("expected 1 entry, got index %v", db.index)
 	}
 }
 
 func TestTruncatedKey(t *testing.T) {
 	_, dir, _ := SetupTempDB(t, WithMergeEnabled(false))
 
-	// write header for keyLen=3,valLen=2, then only 1 byte of the key
 	f, _ := os.Create(filepath.Join(dir, "seg001"))
-	// header: keyLen=3,valLen=2
+
+	// write one good record
+	_, _ = f.Write([]byte{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 'k', 'v'})
+
+	// write header for keyLen=3,valLen=2, then only 1 byte of the key
 	_, _ = f.Write([]byte{3, 0, 0, 0, 2, 0, 0, 0})
 	// only 1 of the 3 key bytes
 	_, _ = f.Write([]byte("x"))
@@ -148,9 +154,17 @@ func TestTruncatedKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open on partial-key: %v", err)
 	}
-	if len(db.index) != 0 {
-		t.Errorf("expected no entries, got index %v", db.index)
+
+	// good record should be indexed
+	if val, err := db.Get("k"); err != nil || val != "v" {
+		t.Errorf("expected k→v, got %q, %v", val, err)
 	}
+
+	// second key should not be indexed
+	if len(db.index) != 1 {
+		t.Errorf("expected 1 entry, got index %v", db.index)
+	}
+
 }
 
 func TestTruncatedValue(t *testing.T) {
@@ -158,9 +172,9 @@ func TestTruncatedValue(t *testing.T) {
 
 	// write one good record, then header+full key, but only 1 of 2 value bytes
 	f, _ := os.Create(filepath.Join(dir, "seg001"))
-	// good record: keyLen=1,valLen=1,"k","v"
-	_, _ = f.Write([]byte{1, 0, 0, 0, 1, 0, 0, 0, 'k', 'v'})
-	// next header: keyLen=2,valLen=2
+	// good record: keyLen=1, valLen=1, type=1, reserved=0, "k","v"
+	_, _ = f.Write([]byte{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 'k', 'v'})
+	// next header: keyLen=2, valLen=2
 	_, _ = f.Write([]byte{2, 0, 0, 0, 2, 0, 0, 0})
 	// write full key "hi"
 	_, _ = f.Write([]byte("hi"))
@@ -194,13 +208,13 @@ func TestOverwriteAfterPartialAppend(t *testing.T) {
 	offC := active.size
 
 	// 2) Simulate a crash *during* the third Set:
-	//    manually open the same file and write only half of the 8-byte header
+	//    manually open the same file and write only half of the 10-byte header
 	f, _ := os.OpenFile(getSegmentPath(db.dir, active.id), os.O_WRONLY, 0)
 
 	// Seek to where the next record should start
 	_, _ = f.Seek(offC, io.SeekStart)
 
-	// Write only 4 of the 8 header bytes (e.g. keyLen=3, valLen=4 → write only keyLen)
+	// Write only 4 of the 10 header bytes (write only keyLen)
 	hdrPart := make([]byte, 4)
 	binary.LittleEndian.PutUint32(hdrPart, 3)
 	_, _ = f.Write(hdrPart)
@@ -234,9 +248,9 @@ func TestSegmentCount(t *testing.T) {
 		totalWrites       = keys * rounds
 
 		// calculate the size of a single record
-		overhead = 8 // 4B keyLen + 4B valLen
+		overhead = hdrLen
 		keyLen   = 5 // "k%04d"
-		valLen   = 3 // "xxx"
+		valLen   = 2 // "x"
 		writeLen = overhead + keyLen + valLen
 
 		// With post-write rollover, a segment can fit n writes where the size
@@ -256,7 +270,7 @@ func TestSegmentCount(t *testing.T) {
 	for r := 0; r < rounds; r++ {
 		for k := 0; k < keys; k++ {
 			key := fmt.Sprintf("k%04d", k)
-			_ = db.Set(key, "xxx")
+			_ = db.Set(key, "xx")
 		}
 	}
 

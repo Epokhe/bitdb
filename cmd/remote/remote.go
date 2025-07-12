@@ -12,28 +12,39 @@ type DBRemote struct {
 	db *core.DB
 }
 
+type GetArgs struct {
+	Key string
+}
+
 type SetArgs struct {
 	Key string
 	Val string
 }
 
-type GetArgs struct {
+type DeleteArgs struct {
 	Key string
 }
 
 func (remote *DBRemote) Get(args *GetArgs, reply *string) error {
-	if val, err := remote.db.Get(args.Key); err != nil {
+	val, err := remote.db.Get(args.Key)
+	if err != nil {
 		return err
-	} else {
-		*reply = val
-		return nil
 	}
+	*reply = val
+	return nil
 }
 
 func (remote *DBRemote) Set(args *SetArgs, _ *struct{}) error {
 	// todo handle errors correctly. we need to stop on errors
 	//  i think we're not stopping currently
 	if err := remote.db.Set(args.Key, args.Val); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (remote *DBRemote) Delete(args *DeleteArgs, _ *struct{}) error {
+	if err := remote.db.Delete(args.Key); err != nil {
 		return err
 	}
 	return nil

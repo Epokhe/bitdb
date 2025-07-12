@@ -81,10 +81,10 @@ func parseSegment(dir string, id int) (*segment, []keyOffset, error) {
 }
 
 // write writes record to the segment and returns the key offset
-func (s *segment) write(key, val string, fsync bool) (int64, error) {
+func (s *segment) write(key string, val string, wt WriteType, fsync bool) (int64, error) {
 	off := s.size
 
-	n, err := writeKV(s.writer, key, val)
+	n, err := writeKV(s.writer, wt, key, val)
 	if err != nil {
 		return 0, err
 	}
@@ -124,18 +124,29 @@ func (s *segment) finalize() error {
 	return nil
 }
 
+type WriteType int8
+
+const (
+	TypeDelete WriteType = iota
+	TypeSet
+)
+
+const hdrLen = 10 // 4B keyLen + 4B valLen + 1 writeType + 1 reserved
+
 // writeKV now emits:
 //
-//	[4-byte keyLen][4-byte valLen]  ← one 8-byte write
+//	[4-byte keyLen][4-byte valLen][1-byte writeType][1-byte reserved]  ← one 10-byte write
 //	[key bytes]                      ← one write
 //	[val bytes]                      ← one write
 //
 // returns the total length
-func writeKV(w *bufio.Writer, key, val string) (int64, error) {
-	// Build an 8-byte header on the stack
-	var hdr [8]byte
+func writeKV(w *bufio.Writer, wt WriteType, key string, val string) (int64, error) {
+	// Build an 10-byte header on the stack
+	var hdr [hdrLen]byte
 	binary.LittleEndian.PutUint32(hdr[0:4], uint32(len(key)))
 	binary.LittleEndian.PutUint32(hdr[4:8], uint32(len(val)))
+	hdr[8] = byte(wt)
+	hdr[9] = 0 // currently not used. exists just to make header 10 bytes.
 
 	// Write header
 	if _, err := w.Write(hdr[:]); err != nil {
@@ -150,7 +161,7 @@ func writeKV(w *bufio.Writer, key, val string) (int64, error) {
 	// Write value
 	_, err := w.WriteString(val)
 
-	writeLen := int64(8 + len(key) + len(val))
+	writeLen := int64(hdrLen + len(key) + len(val))
 
 	return writeLen, err
 }
@@ -188,7 +199,7 @@ func (rs *recordScanner) scan() bool {
 	rs.record = nil
 
 	// header for key/value length prefixes
-	hdr := make([]byte, 8)
+	hdr := make([]byte, hdrLen)
 
 	// Either EOF
 	isEOF := func(err error) bool {
@@ -256,7 +267,7 @@ func (rs *recordScanner) scan() bool {
 	//}
 
 	// advance offset for next record
-	rs.end += int64(8 + keyLen + valLen)
+	rs.end += int64(hdrLen + keyLen + valLen)
 
 	return true
 }

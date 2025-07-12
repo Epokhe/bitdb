@@ -279,7 +279,7 @@ func (db *DB) Get(key string) (string, error) {
 		return "", fmt.Errorf("%w: %q", ErrKeyNotFound, key)
 	}
 
-	val, err := db.readValueAt(loc)
+	val, wt, err := db.readValueAt(loc)
 	if err != nil {
 		// this is an unexpected error, because in normal operation,
 		// if key is on index, its corresponding value should exist on the disk file
@@ -287,45 +287,73 @@ func (db *DB) Get(key string) (string, error) {
 		return "", fmt.Errorf("db.readValueAt recordLocation%+v: %w", loc, err)
 	}
 
+	if wt == TypeDelete {
+		// We shouldn't get here in normal circumstances because we're
+		// removing the key from db.index on DB.Delete()
+		// The only case I can think of is if seg.write() in DB.Delete()
+		// returns an error but file write succeeds internally.
+		// In that case, db.index won't be deleted so we will enter here
+		return "", fmt.Errorf("%w: %q", ErrKeyNotFound, key)
+	}
+
 	return val, nil
 }
 
 // readValueAt reads back a single record at offset in two syscalls:
-//  1. ReadAt 8 bytes → header[0:4]==keyLen, header[4:8]==valLen
+//  1. ReadAt 10 bytes → header[0:4]==keyLen, header[4:8]==valLen, header[8]==writeType, header[9] reserved
 //  2. ReadAt keyLen+valLen bytes → payload
 //
 // I'm okay with two syscalls, no need to optimize them
 // because they don't lead to two disk reads thanks to page cache
-func (db *DB) readValueAt(loc *recordLocation) (val string, err error) {
+func (db *DB) readValueAt(loc *recordLocation) (val string, wt WriteType, err error) {
 	// Read both lengths at once
-	var hdr [8]byte
+	var hdr [hdrLen]byte
 	file := loc.seg.file
 	if _, err = file.ReadAt(hdr[:], loc.offset); err != nil {
-		return "", err
+		return "", 0, err
 	}
+
 	keyLen := int(binary.LittleEndian.Uint32(hdr[0:4]))
 	valLen := int(binary.LittleEndian.Uint32(hdr[4:8]))
+	wt = WriteType(hdr[8])
 
 	// Read key+val in one go
 	buf := make([]byte, valLen)
-	if _, err = file.ReadAt(buf, loc.offset+8+int64(keyLen)); err != nil {
-		return "", err
+	if _, err = file.ReadAt(buf, loc.offset+hdrLen+int64(keyLen)); err != nil {
+		return "", wt, err
 	}
 
 	val = string(buf)
-	return val, nil
+	return val, wt, nil
+}
+
+func (db *DB) checkRolloverMerge(seg *segment) error {
+	if seg.size < db.rolloverThreshold {
+		return nil
+	}
+
+	// we will have a new segment active
+	err := db.addSegment()
+	if err != nil {
+		return err
+	}
+
+	// +1 because threshold logic checks only inactive segments
+	if db.mergeEnabled && len(db.segments) >= db.segmentMergeThreshold+1 {
+		db.tryMerge()
+	}
+
+	return nil
 }
 
 func (db *DB) Set(key, val string) error {
 	db.rw.Lock()
 	defer db.rw.Unlock()
 
-	var err error
-
 	// get active segment
 	seg := db.segments[len(db.segments)-1]
 
-	off, err := seg.write(key, val, db.fsync)
+	off, err := seg.write(key, val, TypeSet, db.fsync)
 	if err != nil {
 		return err
 	}
@@ -336,18 +364,34 @@ func (db *DB) Set(key, val string) error {
 	// index will be rebuilt anyway
 	db.index[key] = &recordLocation{seg: seg, offset: off}
 
-	// segment rollover and merging
-	if seg.size >= db.rolloverThreshold {
-		// we will have a new segment active
-		err = db.addSegment()
-		if err != nil {
-			return err
-		}
+	if err = db.checkRolloverMerge(seg); err != nil {
+		return err
+	}
 
-		// +1 because threshold logic checks only inactive segments
-		if db.mergeEnabled && len(db.segments) >= db.segmentMergeThreshold+1 {
-			db.tryMerge()
-		}
+	return nil
+}
+
+func (db *DB) Delete(key string) error {
+	db.rw.Lock()
+	defer db.rw.Unlock()
+
+	_, ok := db.index[key]
+	if !ok {
+		return fmt.Errorf("%w: %q", ErrKeyNotFound, key)
+	}
+
+	// get active segment
+	seg := db.segments[len(db.segments)-1]
+
+	if _, err := seg.write(key, "", TypeDelete, db.fsync); err != nil {
+		return err
+	}
+
+	// delete the key. this makes get calls on deleted keys more efficient
+	delete(db.index, key)
+
+	if err := db.checkRolloverMerge(seg); err != nil {
+		return err
 	}
 
 	return nil

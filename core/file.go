@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 )
 
+// todo think of a better filename?
+
 // writeFileAtomic atomically replaces the file with the full contents of data.
 // It does so by writing to a temp file in the same directory, fsyncing it,
 // renaming it over the old path, then fsyncing the directory.

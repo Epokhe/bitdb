@@ -12,6 +12,7 @@ func usage() {
 	fmt.Fprintf(os.Stderr, "usage:\n")
 	fmt.Fprintf(os.Stderr, "  client get <key>\n")
 	fmt.Fprintf(os.Stderr, "  client set <key> <value>\n")
+	fmt.Fprintf(os.Stderr, "  client delete <key>\n")
 	os.Exit(1)
 }
 
@@ -60,6 +61,27 @@ func main() {
 		err = client.Call("DB.Set", &remote.SetArgs{Key: key, Val: val}, &setReply)
 		if err != nil {
 			log.Fatalf("failed to set the key: %v\n", err)
+		}
+
+		fmt.Println("done")
+
+	case "delete":
+		if len(os.Args) != 3 {
+			usage()
+		}
+		key := os.Args[2]
+
+		client, err := rpc.Dial("tcp", "localhost:1729")
+		if err != nil {
+			log.Fatalf("failed to dial rpc: %v\n", err)
+		}
+
+		var deleteReply struct{}
+
+		err = client.Call("DB.Delete", &remote.DeleteArgs{Key: key}, &deleteReply)
+		// todo don't give fatal if error is key not found
+		if err != nil {
+			log.Fatalf("failed to delete the key: %v\n", err)
 		}
 
 		fmt.Println("done")

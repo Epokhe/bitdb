@@ -25,7 +25,7 @@ func TestMergeRunsOnlyWhenThresholdExceeded(t *testing.T) {
 			WithMergeEnabled(true),
 		)
 
-		// Each Set operation adds 12 bytes (8 bytes header + 2 bytes key + 2 bytes value).
+		// Each Set operation adds 14 bytes (10 bytes header + 2 bytes key + 2 bytes value).
 		// Segment size limit is 20 bytes.
 		_ = db.Set("k1", "v1")
 		_ = db.Set("k1", "v2") // segment 1 over threshold, rollover
@@ -59,7 +59,7 @@ func TestMergeKeepsLatestAndDropsObsolete(t *testing.T) {
 			WithMergeEnabled(true),
 		)
 
-		// Each Set operation adds 8 bytes header + len(key) + len(value).
+		// Each Set operation adds 10 bytes header + len(key) + len(value).
 		_ = db.Set("k1", "old")
 		_ = db.Set("k2", "old") // segment 1 over threshold, rollover
 		_ = db.Set("k1", "new")
@@ -91,7 +91,7 @@ func TestMergeProducesMultipleSegments(t *testing.T) {
 			WithMergeEnabled(true),
 		)
 
-		// Each Set operation adds 8 bytes header + len(key) + len(value).
+		// Each Set operation adds 10 bytes header + len(key) + len(value).
 		// Segment size limit is 20 bytes.
 		for i := 0; i < 6; i++ {
 			k := fmt.Sprintf("k%d", i)
@@ -232,7 +232,7 @@ func TestMergeDisabled(t *testing.T) {
 			WithMergeEnabled(false),
 		)
 
-		// Each Set operation adds 8 bytes header + len(key) + len(value).
+		// Each Set operation adds 10 bytes header + len(key) + len(value).
 		// Segment size limit is 20 bytes.
 		for i := 0; i < 6; i++ {
 			k := fmt.Sprintf("k%d", i)
@@ -323,12 +323,10 @@ func TestMergePersistence(t *testing.T) {
 func TestMultipleSequentialMerges(t *testing.T) {
 	synctest.Run(func() {
 		const (
-			// Use a threshold that is more sensitive to write length changes.
-			// With a threshold of 23, a writeLen of 11 results in 3 writes/seg,
-			// while a writeLen of 12 results in 2 writes/seg.
-			rolloverThreshold = 23
+			// Using a threshold that is sensitive to write length changes.
+			rolloverThreshold = 89
 			mergeThreshold    = 2
-			overhead          = 8 // 4B keyLen + 4B valLen
+			overhead          = hdrLen
 			keyLen            = 2 // "k1" → 2 chars
 			valLen            = 2 // "v0", "v1", ...
 			writeLen          = overhead + keyLen + valLen

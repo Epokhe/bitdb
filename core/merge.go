@@ -108,7 +108,7 @@ func (db *DB) merge() (rerr error) {
 				}
 			}
 
-			off, err := mergeSeg.write(rec.key, rec.val, db.fsync)
+			off, err := mergeSeg.write(rec.key, rec.val, TypeSet, db.fsync)
 			if err != nil {
 				return err
 			}
