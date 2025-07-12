@@ -35,7 +35,6 @@ type DB struct {
 	rolloverThreshold     int64                      // rollover segment when the active segment reaches this
 	segmentMergeThreshold int                        // run merge when inactive(merge-able) segment count reaches this
 	onMergeStart          func()                     // test hook
-	// todo consider switching to channel based signaling on merge start
 }
 
 var ErrKeyNotFound = errors.New("key not found")
@@ -66,11 +65,13 @@ func WithOnMergeStart(f func()) Option {
 
 type Option func(*DB)
 
-func Open(dir string, opts ...Option) (*DB, error) {
+func Open(dir string, opts ...Option) (rdb *DB, rerr error) {
 	db := &DB{
-		dir:          dir,
-		mergeSem:     make(chan struct{}, 1),
-		index:        make(map[string]*recordLocation),
+		dir:      dir,
+		mergeSem: make(chan struct{}, 1),
+		index:    make(map[string]*recordLocation),
+		// todo mergeErr may not be listened, which will hang the merge goroutine
+		//  should i enforce the listen somehow, or drop errors?
 		mergeErr:     make(chan error, 1),
 		onMergeStart: func() {},
 		// default values
@@ -85,25 +86,22 @@ func Open(dir string, opts ...Option) (*DB, error) {
 		opt(db)
 	}
 
-	// todo use named return variable instead
-	// DO NOT SHADOW err so defer does not miss it
-	var err error
-
 	// if we're erroring out, run abort process
 	defer func() {
-		if err != nil {
+		if rerr != nil {
 			db.AbortOnOpen()
 		}
 	}()
 
-	if err = os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir %q: %w", dir, err)
 	}
 
-	db.manifest, err = ensureManifest(db.dir)
+	mnf, err := ensureManifest(db.dir)
 	if err != nil {
 		return nil, fmt.Errorf("ensuremanifest: %w", err)
 	}
+	db.manifest = mnf
 
 	// we will load the segments ordered by the manifest file
 	mnfBytes, err := io.ReadAll(db.manifest)
