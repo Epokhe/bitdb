@@ -10,10 +10,9 @@ import (
 )
 
 type segment struct {
-	id     int
-	file   *os.File      // open file handle for reading records
-	size   int64         // size of the segment file in bytes
-	writer *bufio.Writer // buffered writer for segment
+	id   int
+	file *os.File // open file handle for reading and writing records
+	size int64    // size of the segment file in bytes
 }
 
 func newSegment(dir string, id int) (*segment, error) {
@@ -23,9 +22,7 @@ func newSegment(dir string, id int) (*segment, error) {
 		return nil, fmt.Errorf("create segment file %q: %w", path, err)
 	}
 
-	w := bufio.NewWriter(f)
-
-	return &segment{id: id, file: f, writer: w, size: 0}, nil
+	return &segment{id: id, file: f, size: 0}, nil
 }
 
 type keyOffset struct {
@@ -75,8 +72,6 @@ func parseSegment(dir string, id int) (*segment, []keyOffset, error) {
 		return nil, nil, err
 	}
 
-	seg.writer = bufio.NewWriter(f)
-
 	return seg, keyOffs, nil
 }
 
@@ -84,21 +79,13 @@ func parseSegment(dir string, id int) (*segment, []keyOffset, error) {
 func (s *segment) write(key string, val string, wt WriteType, fsync bool) (int64, error) {
 	off := s.size
 
-	n, err := writeKV(s.writer, wt, key, val)
+	n, err := writeKV(s.file, wt, key, val)
 	if err != nil {
 		return 0, err
 	}
 
-	// todo check why we need to keep file size.
-	//  If I do flush, is it really needed?
 	// increase file size by the written byte count
 	s.size += n
-
-	// flush into the OS page cache so ReadAt will see it
-	// todo measure the cost
-	if err := s.writer.Flush(); err != nil {
-		return 0, err
-	}
 
 	if fsync {
 		// I can use fsync if I want fsync‐per‐write durability
@@ -113,10 +100,6 @@ func (s *segment) write(key string, val string, wt WriteType, fsync bool) (int64
 }
 
 func (s *segment) finalize() error {
-	if err := s.writer.Flush(); err != nil {
-		return err
-	}
-
 	if err := s.file.Sync(); err != nil {
 		return err
 	}
@@ -133,37 +116,29 @@ const (
 
 const hdrLen = 10 // 4B keyLen + 4B valLen + 1 writeType + 1 reserved
 
-// writeKV now emits:
+// writeKV emits:
 //
-//	[4-byte keyLen][4-byte valLen][1-byte writeType][1-byte reserved]  ← one 10-byte write
-//	[key bytes]                      ← one write
-//	[val bytes]                      ← one write
+//	[4-byte keyLen][4-byte valLen][1-byte writeType][1-byte reserved][key bytes][val bytes]
 //
-// returns the total length
-func writeKV(w *bufio.Writer, wt WriteType, key string, val string) (int64, error) {
-	// Build an 10-byte header on the stack
-	var hdr [hdrLen]byte
-	binary.LittleEndian.PutUint32(hdr[0:4], uint32(len(key)))
-	binary.LittleEndian.PutUint32(hdr[4:8], uint32(len(val)))
-	hdr[8] = byte(wt)
-	hdr[9] = 0 // currently not used. exists just to make header 10 bytes.
+// and returns the total length
+func writeKV(w io.Writer, wt WriteType, key string, val string) (int64, error) {
+	// Build complete record in memory for single atomic write
+	totalLen := hdrLen + len(key) + len(val)
+	buf := make([]byte, totalLen)
 
-	// Write header
-	if _, err := w.Write(hdr[:]); err != nil {
-		return 0, err
-	}
+	// Build header
+	binary.LittleEndian.PutUint32(buf[0:4], uint32(len(key)))
+	binary.LittleEndian.PutUint32(buf[4:8], uint32(len(val)))
+	buf[8] = byte(wt)
+	buf[9] = 0 // currently not used. exists just to make header 10 bytes.
 
-	// Write key
-	if _, err := w.WriteString(key); err != nil {
-		return 0, err
-	}
+	// Copy key and value
+	copy(buf[hdrLen:], key)
+	copy(buf[hdrLen+len(key):], val)
 
-	// Write value
-	_, err := w.WriteString(val)
-
-	writeLen := int64(hdrLen + len(key) + len(val))
-
-	return writeLen, err
+	// Single atomic write
+	_, err := w.Write(buf)
+	return int64(totalLen), err
 }
 
 // scannedRecord is used by recordScanner to keep information about current record
