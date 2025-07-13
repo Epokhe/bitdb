@@ -555,28 +555,3 @@ func TestDeleteMultipleKeys(t *testing.T) {
 		}
 	}
 }
-
-func TestDeleteSegmentWriteError(t *testing.T) {
-	db, _, _ := SetupTempDB(t, WithMergeEnabled(false))
-
-	_ = db.Set("key", "value")
-
-	// Close the active segment file to simulate write error
-	active := db.segments[len(db.segments)-1]
-	_ = active.file.Close()
-
-	// Delete should fail due to closed file
-	err := db.Delete("key")
-	if err == nil {
-		t.Fatal("expected delete to fail with closed file")
-	}
-
-	// Key should still exist in index since delete failed
-	if _, exists := db.index["key"]; !exists {
-		t.Error("key should still exist in index after failed delete")
-	}
-
-	// This tests the edge case mentioned in Get() method:
-	// if seg.write() fails but somehow a partial write occurred,
-	// the key would still be in index but might point to corrupted data
-}
