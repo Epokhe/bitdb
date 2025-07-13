@@ -427,3 +427,131 @@ func TestNextFileNumberSkipsGaps(t *testing.T) {
 		t.Fatalf("expected new id >9, got %d", active.id)
 	}
 }
+
+func TestDeleteBasic(t *testing.T) {
+	db, _, _ := SetupTempDB(t, WithMergeEnabled(false))
+
+	// Set then delete
+	_ = db.Set("key1", "value1")
+	err := db.Delete("key1")
+	if err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+
+	// Get should return ErrKeyNotFound
+	if _, err := db.Get("key1"); !errors.Is(err, ErrKeyNotFound) {
+		t.Errorf("expected ErrKeyNotFound after delete, got %v", err)
+	}
+}
+
+func TestDeleteNonExistentKey(t *testing.T) {
+	db, _, _ := SetupTempDB(t, WithMergeEnabled(false))
+
+	err := db.Delete("nonexistent")
+	if !errors.Is(err, ErrKeyNotFound) {
+		t.Errorf("expected ErrKeyNotFound for nonexistent key, got %v", err)
+	}
+}
+
+func TestDeleteAfterOverwrite(t *testing.T) {
+	db, _, _ := SetupTempDB(t, WithMergeEnabled(false))
+
+	_ = db.Set("key", "value1")
+	_ = db.Set("key", "value2") // overwrite
+	err := db.Delete("key")
+	if err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+
+	if _, err := db.Get("key"); !errors.Is(err, ErrKeyNotFound) {
+		t.Errorf("expected ErrKeyNotFound after delete, got %v", err)
+	}
+}
+
+func TestDeletePersistence(t *testing.T) {
+	db, path, _ := SetupTempDB(t, WithMergeEnabled(false))
+
+	_ = db.Set("key1", "value1")
+	_ = db.Set("key2", "value2")
+	_ = db.Delete("key1")
+	_ = db.Close()
+
+	// Reopen and verify deletion persisted
+	db2, err := Open(path, WithMergeEnabled(false))
+	if err != nil {
+		t.Fatalf("reopen failed: %v", err)
+	}
+	defer db2.Close() // nolint:errcheck
+
+	// key1 should still be deleted
+	if _, err := db2.Get("key1"); !errors.Is(err, ErrKeyNotFound) {
+		t.Errorf("deleted key found after reopen: %v", err)
+	}
+
+	// key2 should still exist
+	if val, err := db2.Get("key2"); err != nil || val != "value2" {
+		t.Errorf("expected key2=value2, got %q, %v", val, err)
+	}
+}
+
+func TestDeleteTriggersRollover(t *testing.T) {
+	db, _, _ := SetupTempDB(t, WithRolloverThreshold(25), WithMergeEnabled(false))
+
+	_ = db.Set("key1", "value1") // 20 bytes (10 header + 4 key + 6 value)
+
+	countBefore := len(db.segments)
+
+	// This delete should trigger rollover (20 + 14 = 34 > 25)
+	_ = db.Delete("key1") // 14 bytes (10 header + 4 key + 0 value)
+
+	countAfter := len(db.segments)
+	if countAfter != countBefore+1 {
+		t.Errorf("expected rollover, segments: %d -> %d", countBefore, countAfter)
+	}
+}
+
+func TestSetAfterDelete(t *testing.T) {
+	db, _, _ := SetupTempDB(t, WithMergeEnabled(false))
+
+	_ = db.Set("key", "original")
+	_ = db.Delete("key")
+	_ = db.Set("key", "resurrected")
+
+	if val, err := db.Get("key"); err != nil || val != "resurrected" {
+		t.Errorf("expected key=resurrected, got %q, %v", val, err)
+	}
+}
+
+func TestDeleteMultipleKeys(t *testing.T) {
+	db, _, _ := SetupTempDB(t, WithMergeEnabled(false))
+
+	// Set multiple keys
+	keys := []string{"a", "b", "c", "d", "e"}
+	for _, key := range keys {
+		_ = db.Set(key, "value_"+key)
+	}
+
+	// Delete every other key
+	toDelete := []string{"a", "c", "e"}
+	for _, key := range toDelete {
+		if err := db.Delete(key); err != nil {
+			t.Fatalf("Delete %q failed: %v", key, err)
+		}
+	}
+
+	// Verify deleted keys are gone
+	for _, key := range toDelete {
+		if _, err := db.Get(key); !errors.Is(err, ErrKeyNotFound) {
+			t.Errorf("expected %q to be deleted, got %v", key, err)
+		}
+	}
+
+	// Verify remaining keys still exist
+	remaining := []string{"b", "d"}
+	for _, key := range remaining {
+		expected := "value_" + key
+		if val, err := db.Get(key); err != nil || val != expected {
+			t.Errorf("expected %q=%q, got %q, %v", key, expected, val, err)
+		}
+	}
+}
