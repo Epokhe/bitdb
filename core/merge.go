@@ -85,10 +85,14 @@ func (db *DB) merge() (rerr error) {
 		for rs.scan() {
 			rec := rs.record
 
-			// key should always exist in the index
 			db.rw.RLock()
-			loc := db.index[rec.key]
+			loc, ok := db.index[rec.key]
 			db.rw.RUnlock()
+
+			// key is deleted, skip it
+			if !ok {
+				continue
+			}
 
 			// we will include latest occurrence the record
 			// in the new segment and update the merge index
