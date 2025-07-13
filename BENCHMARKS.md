@@ -1,5 +1,14 @@
 # Benchmarks
 
+Results for ``
+```
+Benchmark_Get-2         	  381571	      3195 ns/op	       1 B/op	       1 allocs/op
+Benchmark_Set-2         	  379314	      3378 ns/op	      58 B/op	       3 allocs/op
+Benchmark_Fsync_Set-2   	     100	  10253050 ns/op	     118 B/op	       3 allocs/op
+Benchmark_Merge-2       	      15	  80148333 ns/op	   91941 B/op	    2071 allocs/op
+```
+
+
 Results for `e1e0b2a9631ab39c65e085e82037cc0ecdc11895`
 ```
 Benchmark_Get-2         	  341846	      3302 ns/op	       1 B/op	       1 allocs/op
