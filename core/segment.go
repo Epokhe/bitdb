@@ -158,6 +158,9 @@ type recordScanner struct {
 
 func newRecordScanner(s *segment) *recordScanner {
 	const maxint64 = 1<<63 - 1 // maybe check file size instead
+
+	// we're using SectionReader so we don't touch the file handle
+	// this way we run scan the file repeatedly
 	sr := io.NewSectionReader(s.file, 0, maxint64)
 	return &recordScanner{reader: bufio.NewReader(sr)}
 }
