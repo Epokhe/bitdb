@@ -288,6 +288,10 @@ func (db *DB) Get(key string) (string, error) {
 	}
 
 	if wt == TypeDelete {
+		// todo we should work on preventing this to happen.
+		//  stop the db, make it read only etc. this also has a
+		//  messy interaction with the merge handling of deleted keys
+
 		// We shouldn't get here in normal circumstances because we're
 		// removing the key from db.index on DB.Delete()
 		// The only case I can think of is if seg.write() in DB.Delete()

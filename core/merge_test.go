@@ -606,3 +606,49 @@ func TestMergeRollbackOnError(t *testing.T) {
 		}
 	})
 }
+
+func TestMergeHandlesDeletedKeys(t *testing.T) {
+	synctest.Run(func() {
+		db, _, _ := SetupTempDB(t,
+			WithRolloverThreshold(20),
+			WithMergeThreshold(2),
+			WithMergeEnabled(true),
+		)
+
+		_ = db.Set("k1", "old")
+		_ = db.Set("k2", "val") // rollover to seg002
+		_ = db.Delete("k1")
+		_ = db.Delete("k2") // rollover to seg003 + merge trigger
+
+		synctest.Wait() // wait for merge to complete
+
+		// Verify both keys are deleted after merge
+		if _, err := db.Get("k1"); !errors.Is(err, ErrKeyNotFound) {
+			t.Errorf("expected k1 to be deleted after merge, got %v", err)
+		}
+		if _, err := db.Get("k2"); !errors.Is(err, ErrKeyNotFound) {
+			t.Errorf("expected k2 to be deleted after merge, got %v", err)
+		}
+
+		// We expect 2 segments total (1 merged + 1 active, both with no data)
+		if len(db.segments) != 2 {
+			t.Errorf("expected 2 segments after merging all deletions, got %d", len(db.segments))
+		}
+
+		// Verify merged segment is empty
+		if seg := db.segments[0]; seg.size > 0 {
+			t.Errorf("merged segment %d should be empty but has size %d", seg.id, seg.size)
+		}
+
+		// Verify no data remains in merge segment by checking total disk size
+		totalSize, err := db.DiskSize()
+		if err != nil {
+			t.Fatalf("DiskSize failed: %v", err)
+		}
+
+		if totalSize > 0 {
+			t.Errorf("expected no disk usage after deleting everything, got %d bytes", totalSize)
+		}
+
+	})
+}
