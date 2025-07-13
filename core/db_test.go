@@ -13,7 +13,7 @@ import (
 func TestSetAndGet(t *testing.T) {
 	db, _, _ := SetupTempDB(t, WithMergeEnabled(false))
 
-	// set a key and retrieve it
+	// set a key and immediately retrieve it (read-after-write consistency)
 	if err := db.Set("foo", "bar"); err != nil {
 		t.Fatalf("Set failed: %v", err)
 	}
