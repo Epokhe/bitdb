@@ -35,6 +35,7 @@ type DB struct {
 	rolloverThreshold int64                      // rollover segment when the active segment reaches this
 	mergeThreshold    int                        // run merge when inactive(merge-able) segment count reaches this
 	onMergeStart      func()                     // test hook
+	onMergeApply      func()                     // test hook
 }
 
 var ErrKeyNotFound = errors.New("key not found")
@@ -125,16 +126,22 @@ func Open(dir string, opts ...Option) (rdb *DB, rerr error) {
 
 	// load all segments according to parsed manifest
 	for _, id := range segIds {
-		var seg *segment
-		var keyOffs []keyOffset
-		seg, keyOffs, err = parseSegment(db.dir, id)
+		seg, recs, err := parseSegment(db.dir, id)
 		if err != nil {
 			return nil, fmt.Errorf("loadsegment %q: %w", id, err)
 		}
 
-		// update db index with the returned offsets
-		for _, kOff := range keyOffs {
-			db.index[kOff.key] = &recordLocation{seg: seg, offset: kOff.off}
+		// update db index with the returned records
+		// We simulate the history. Sets update the index, deletes remove from the index.
+		for _, rec := range recs {
+			switch rec.wt {
+			case TypeDelete:
+				delete(db.index, rec.key)
+			case TypeSet:
+				db.index[rec.key] = &recordLocation{seg: seg, offset: rec.off}
+			default:
+				log.Panicf("unhandled write type: %v", rec.wt)
+			}
 		}
 
 		db.segments = append(db.segments, seg)

@@ -25,54 +25,46 @@ func newSegment(dir string, id int) (*segment, error) {
 	return &segment{id: id, file: f, size: 0}, nil
 }
 
-type keyOffset struct {
-	key string
-	off int64
-}
-
-func parseSegment(dir string, id int) (*segment, []keyOffset, error) {
+func parseSegment(dir string, id int) (seg *segment, recs []*scannedRecord, rerr error) {
 	path := getSegmentPath(dir, id)
 	f, err := os.OpenFile(path, os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open segment file %q: %w", path, err)
 	}
 
-	seg := &segment{id: id, file: f}
+	seg = &segment{id: id, file: f}
 
 	defer func() {
-		if err != nil {
+		if rerr != nil {
 			_ = seg.file.Close()
 		}
 	}()
 
-	var keyOffs []keyOffset
-
-	// collect the key offsets from the current segment
+	// collect the records from the current segment
 	rs := newRecordScanner(seg)
 	for rs.scan() {
-		r := rs.record
-		keyOffs = append(keyOffs, keyOffset{key: r.key, off: r.off})
+		recs = append(recs, rs.record)
 	}
 
-	err = rs.err // catch the possible error from scan
+	if err := rs.err; err != nil {
+		return nil, nil, err
+	}
 
 	// update segment size with the last correct offset
 	seg.size = rs.end
 
 	// in case where we have a corrupted record,
 	// we truncate to the last "good" offset
-	err = seg.file.Truncate(seg.size)
-	if err != nil {
+	if err := seg.file.Truncate(seg.size); err != nil {
 		return nil, nil, err
 	}
 
 	// Go to the "new" end of the file in case it's truncated
-	_, err = seg.file.Seek(0, io.SeekEnd)
-	if err != nil {
+	if _, err := seg.file.Seek(0, io.SeekEnd); err != nil {
 		return nil, nil, err
 	}
 
-	return seg, keyOffs, nil
+	return seg, recs, nil
 }
 
 // write writes record to the segment and returns the key offset
@@ -146,6 +138,7 @@ type scannedRecord struct {
 	key string
 	val string
 	off int64 // start offset of the record in the segment
+	wt  WriteType
 }
 
 // recordScanner is a buffered segment reader that doesn't touch file handle
@@ -226,6 +219,7 @@ func (rs *recordScanner) scan() bool {
 		key: string(keyBytes),
 		val: string(valBytes),
 		off: rs.end,
+		wt:  wt,
 	}
 
 	// todo consider making this function configurable so that
