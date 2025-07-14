@@ -190,6 +190,7 @@ func (rs *recordScanner) scan() bool {
 	}
 	keyLen := int(binary.LittleEndian.Uint32(hdr[0:4]))
 	valLen := int(binary.LittleEndian.Uint32(hdr[4:8]))
+	wt := WriteType(hdr[8])
 
 	// read the key payload
 	keyBytes := make([]byte, keyLen)
