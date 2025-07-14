@@ -1,7 +1,9 @@
-# BitDB 
+# BitDB
+
 [![build](https://github.com/Epokhe/bitdb/actions/workflows/build.yml/badge.svg)](https://github.com/Epokhe/bitdb/actions/workflows/build.yml)
 
-BitDB is a lightweight key/value store written in Go. It is a toy project that I worked on while learning Go. It follows a [Bitcask](https://riak.com/assets/bitcask-intro.pdf) style architecture:
+BitDB is a lightweight key/value store written in Go. It is a toy project that I worked on while learning Go. It follows
+a [Bitcask](https://riak.com/assets/bitcask-intro.pdf) style architecture:
 
 * **Append-only segments** – all writes are appended to the active segment file. Older segments become read-only.
 * **In-memory index** – keys are mapped to the segment and byte offset of their latest value for fast reads.
@@ -47,22 +49,22 @@ just lint
 ```
 
 ## Benchmarking/profiling
+
 Results are on BENCHMARKS.md
 
 I'm not doing these on my Mac so I don't wear down my ssd.
 
 Run on hetzner or somewhere else(remember to change TMPDIR as written in justfile)
+
 ```bash
 # Run all benchmarks
 just bench
 ```
 
-Profiling works by running benchmarks and opening a server. 
-After running the profiler, just go to $HOST:1730 
+Profiling works by running benchmarks and opening a server.
+After running the profiler, just go to $HOST:1730
+
 ```bash
 # Profile Set
 just profile Benchmark_Set
 ```
-
-## Pull requests
-We include a clear description of the changes.

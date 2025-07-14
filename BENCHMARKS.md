@@ -1,4 +1,5 @@
 # Benchmarks
+Tested on a Hetzner CX22 instance with an attached volume. 
 
 Results for ``
 ```
