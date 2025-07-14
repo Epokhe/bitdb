@@ -652,3 +652,53 @@ func TestMergeHandlesDeletedKeys(t *testing.T) {
 
 	})
 }
+
+// TestMergeDoesNotOverwriteNewerValues verifies that when a key is updated
+// during merge, the merge does not overwrite the newer value with the older merged value.
+// It tests the updates during critical interval between scan finish and index update.
+// Because at this point, index updates are decided, but index may get updates still.
+// This is why I had to add old locations of each key to mergeOutput.indexChanges, so this
+// is a regression test of that feature.
+func TestMergeDoesNotOverwriteNewerValues(t *testing.T) {
+	synctest.Run(func() {
+		var sanityCheck bool
+		var db *DB
+
+		db, _, _ = SetupTempDB(t,
+			WithRolloverThreshold(30),
+			WithMergeThreshold(2), // Merge after 2 inactive segments
+			WithMergeEnabled(true),
+			WithOnMergeApply(func() {
+				// This runs after merge finished scanning but before index is updated
+				// Write a newer value that should NOT be overwritten by merge
+				_ = db.Set("key", "NEWER_VALUE")
+				sanityCheck = true
+			}),
+		)
+
+		// Create segments with the same key to trigger merge
+		// Each Set = 27 bytes (18 header + 3 key + 6 value)
+		_ = db.Set("key", "value1")
+		_ = db.Set("key", "value2") // seg001 rollover
+		_ = db.Set("key", "value3")
+		_ = db.Set("key", "value4") // seg002 rollover, triggers merge
+
+		synctest.Wait() // Wait for merge to complete
+
+		// Verify setup worked
+		if !sanityCheck {
+			t.Fatal("Test setup failed - newer value was not written during merge")
+		}
+
+		// The critical test: newer value should be preserved
+		val, err := db.Get("key")
+		if err != nil {
+			t.Fatalf("Get failed: %v", err)
+		}
+
+		if val != "NEWER_VALUE" {
+			t.Errorf("Expected 'NEWER_VALUE' (written during merge), got '%s'", val)
+			t.Error("This indicates the merge overwrote a newer value with an older merged value")
+		}
+	})
+}

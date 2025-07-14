@@ -63,6 +63,12 @@ func WithOnMergeStart(f func()) Option {
 	}
 }
 
+func WithOnMergeApply(f func()) Option {
+	return func(db *DB) {
+		db.onMergeApply = f
+	}
+}
+
 type Option func(*DB)
 
 func Open(dir string, opts ...Option) (rdb *DB, rerr error) {
