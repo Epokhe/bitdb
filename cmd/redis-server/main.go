@@ -30,14 +30,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
-	defer db.Close()
+	defer db.Close() // nolint:errcheck
 
 	// Start Redis-compatible server on standard Redis port
 	listener, err := net.Listen("tcp", ":6379")
 	if err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
-	defer listener.Close()
+	defer listener.Close() // nolint:errcheck
 
 	log.Println("BitDB Redis-compatible server listening on :6379")
 
@@ -64,12 +64,12 @@ func main() {
 //
 // Reference: https://redis.io/docs/reference/protocol-spec/#resp-arrays
 func handleConnection(conn net.Conn, db *core.DB) {
-	defer conn.Close()
+	defer conn.Close() // nolint:errcheck
 
 	// Use buffered I/O for better performance with small Redis commands
 	reader := bufio.NewReader(conn)
 	writer := bufio.NewWriter(conn)
-	defer writer.Flush()
+	defer writer.Flush() // nolint:errcheck
 
 	// Process commands in a loop until client disconnects
 	for {
@@ -80,7 +80,7 @@ func handleConnection(conn net.Conn, db *core.DB) {
 				return // Client disconnected cleanly
 			}
 			log.Printf("Parse error: %v", err)
-			writer.WriteString(writeError("ERR parse error"))
+			writer.WriteString(writeError("ERR parse error")) // nolint:errcheck
 			continue
 		}
 
@@ -176,7 +176,7 @@ func parseRESP(reader *bufio.Reader) ([]string, error) {
 // executeCommand executes Redis commands using BitDB and returns RESP-formatted responses
 //
 // Supported Commands (following Redis command specifications):
-// - PING: Test connection, returns "PONG" 
+// - PING: Test connection, returns "PONG"
 // - SET key value: Store key-value pair, returns "OK"
 // - GET key: Retrieve value for key, returns value or null
 // - DEL key: Delete key, returns 1 if deleted or 0 if key didn't exist
@@ -245,7 +245,7 @@ func executeCommand(db *core.DB, args []string) string {
 		return writeInteger(1) // Redis returns 1 for successfully deleted keys
 
 	case "EXISTS":
-		// EXISTS key - check if key exists  
+		// EXISTS key - check if key exists
 		// Redis spec: https://redis.io/commands/exists/
 		if len(args) != 2 {
 			return writeError("ERR wrong number of arguments for 'EXISTS' command")
