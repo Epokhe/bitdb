@@ -81,6 +81,7 @@ func Open(dir string, opts ...Option) (rdb *DB, rerr error) {
 		//  should i enforce the listen somehow, or drop errors?
 		mergeErr:     make(chan error, 1),
 		onMergeStart: func() {},
+		onMergeApply: func() {},
 		// default values
 		fsync:             false,
 		rolloverThreshold: 1 * 1024 * 1024,
