@@ -555,3 +555,30 @@ func TestDeleteMultipleKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestDeletedKeysNotInIndexAfterReopen(t *testing.T) {
+	db, dir, _ := SetupTempDB(t, WithMergeEnabled(false))
+
+	_ = db.Set("a", "1")
+	_ = db.Set("b", "2")
+	_ = db.Delete("a")
+	_ = db.Close()
+
+	db2, err := Open(dir, WithMergeEnabled(false))
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer db2.Close() // nolint:errcheck
+
+	// Deleted key should not exist in index after restart
+	db2.rw.RLock()
+	_, exists := db2.index["a"]
+	db2.rw.RUnlock()
+	if exists {
+		t.Errorf("deleted key 'a' should not exist in index after restart")
+	}
+	// Existing key should remain
+	if val, err := db2.Get("b"); err != nil || val != "2" {
+		t.Errorf("expected b=2 after restart, got %q, %v", val, err)
+	}
+}
