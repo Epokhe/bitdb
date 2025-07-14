@@ -1,0 +1,76 @@
+=== BitDB Redis Protocol Benchmark Test Suite ===
+Make sure BitDB Redis server is running on port 6379
+Start server with: go run ./cmd/redis-server
+
+1. Testing basic connectivity...
+PONG
+
+2. Testing basic CRUD operations...
+OK
+hello world
+1
+1
+
+
+3. SET operation benchmarks...
+Medium dataset (50K operations):
+WARNING: Could not fetch server CONFIG
+SET: 32425.42 requests per second, p50=0.151 msec
+
+Large dataset (100K operations):
+WARNING: Could not fetch server CONFIG
+SET: 34399.72 requests per second, p50=0.279 msec
+
+Extra large dataset (500K operations):
+WARNING: Could not fetch server CONFIG
+SET: 34032.12 requests per second, p50=0.759 msec
+
+
+4. GET operation benchmarks...
+Medium dataset (50K operations):
+WARNING: Could not fetch server CONFIG
+GET: 32320.62 requests per second, p50=0.143 msec
+
+Large dataset (100K operations):
+WARNING: Could not fetch server CONFIG
+GET: 31655.59 requests per second, p50=0.319 msec
+
+Extra large dataset (500K operations):
+WARNING: Could not fetch server CONFIG
+GET: 38267.26 requests per second, p50=0.663 msec
+
+
+5. Concurrency stress tests...
+High concurrency SET (50 clients):
+WARNING: Could not fetch server CONFIG
+SET: 40666.94 requests per second, p50=0.607 msec
+
+High concurrency GET (50 clients):
+WARNING: Could not fetch server CONFIG
+GET: 41597.34 requests per second, p50=0.623 msec
+
+Extreme concurrency SET (100 clients):
+WARNING: Could not fetch server CONFIG
+SET: 39401.10 requests per second, p50=1.295 msec
+
+Extreme concurrency GET (100 clients):
+WARNING: Could not fetch server CONFIG
+GET: 38124.29 requests per second, p50=1.375 msec
+
+
+6. Large value tests...
+1KB values SET:
+WARNING: Could not fetch server CONFIG
+SET: 25667.35 requests per second, p50=0.383 msec
+
+1KB values GET:
+WARNING: Could not fetch server CONFIG
+GET: 35612.54 requests per second, p50=0.279 msec
+
+10KB values SET:
+WARNING: Could not fetch server CONFIG
+SET: 9328.36 requests per second, p50=0.567 msec
+
+10KB values GET:
+WARNING: Could not fetch server CONFIG
+GET: 10050.25 requests per second, p50=0.431 msec
