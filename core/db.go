@@ -22,19 +22,19 @@ import (
 // todo merge configuration under one struct
 
 type DB struct {
-	dir                   string                     // data directory
-	segments              []*segment                 // all segments. last one is the active segment
-	fsync                 bool                       // whether to fsync on each Set call
-	mergeSem              chan struct{}              // merge semaphore
-	rw                    sync.RWMutex               // guards segments & index & manifest
-	mergeErr              chan error                 // async merge error reporting
-	idCtr                 int64                      // segment id counter
-	index                 map[string]*recordLocation // maps each key to its last-seen location
-	manifest              *os.File                   // open file handle for manifest
-	mergeEnabled          bool                       // whether merge is enabled
-	rolloverThreshold     int64                      // rollover segment when the active segment reaches this
-	segmentMergeThreshold int                        // run merge when inactive(merge-able) segment count reaches this
-	onMergeStart          func()                     // test hook
+	dir               string                     // data directory
+	segments          []*segment                 // all segments. last one is the active segment
+	fsync             bool                       // whether to fsync on each Set call
+	mergeSem          chan struct{}              // merge semaphore
+	rw                sync.RWMutex               // guards segments & index & manifest
+	mergeErr          chan error                 // async merge error reporting
+	idCtr             int64                      // segment id counter
+	index             map[string]*recordLocation // maps each key to its last-seen location
+	manifest          *os.File                   // open file handle for manifest
+	mergeEnabled      bool                       // whether merge is enabled
+	rolloverThreshold int64                      // rollover segment when the active segment reaches this
+	mergeThreshold    int                        // run merge when inactive(merge-able) segment count reaches this
+	onMergeStart      func()                     // test hook
 }
 
 var ErrKeyNotFound = errors.New("key not found")
@@ -53,7 +53,7 @@ func WithMergeEnabled(b bool) Option {
 
 func WithMergeThreshold(n int) Option {
 	return func(db *DB) {
-		db.segmentMergeThreshold = n
+		db.mergeThreshold = n
 	}
 }
 
@@ -75,10 +75,10 @@ func Open(dir string, opts ...Option) (rdb *DB, rerr error) {
 		mergeErr:     make(chan error, 1),
 		onMergeStart: func() {},
 		// default values
-		fsync:                 false,
-		rolloverThreshold:     1 * 1024 * 1024,
-		mergeEnabled:          true,
-		segmentMergeThreshold: 100,
+		fsync:             false,
+		rolloverThreshold: 1 * 1024 * 1024,
+		mergeEnabled:      true,
+		mergeThreshold:    100,
 	}
 
 	// apply options
@@ -343,7 +343,7 @@ func (db *DB) checkRolloverMerge(seg *segment) error {
 	}
 
 	// +1 because threshold logic checks only inactive segments
-	if db.mergeEnabled && len(db.segments) >= db.segmentMergeThreshold+1 {
+	if db.mergeEnabled && len(db.segments) >= db.mergeThreshold+1 {
 		db.tryMerge()
 	}
 
