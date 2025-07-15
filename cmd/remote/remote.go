@@ -78,7 +78,7 @@ func StartRPC(db *core.DB, addr string) (string, func(), error) {
 
 		// flush & close file
 		if err := db.Close(); err != nil {
-			log.Fatalf("failed to persist to disk: %v\n", err)
+			log.Fatalf("db close: %v\n", err)
 		}
 
 	}
