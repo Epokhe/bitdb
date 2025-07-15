@@ -115,11 +115,11 @@ func TestTruncatedHeader(t *testing.T) {
 	// Manually write a valid record + truncated second record
 	f, _ := os.Create(filepath.Join(dir, "seg001"))
 	// Write one good record
-	_, _ = writeKV(f, TypeSet, "k", "v")
+	_, _ = writeRecord(f, TypeSet, "k", "v")
 
 	// Generate a second record and write a truncated version of it to simulate corruption
 	var buf bytes.Buffer
-	_, _ = writeKV(&buf, TypeSet, "second", "value")
+	_, _ = writeRecord(&buf, TypeSet, "second", "value")
 	truncatedRecord := buf.Bytes()[:2] // only first 2 bytes of the 18-byte header
 	_, _ = f.Write(truncatedRecord)
 	_ = f.Close()
@@ -147,11 +147,11 @@ func TestTruncatedKey(t *testing.T) {
 	f, _ := os.Create(filepath.Join(dir, "seg001"))
 
 	// write one good record
-	_, _ = writeKV(f, TypeSet, "k", "v")
+	_, _ = writeRecord(f, TypeSet, "k", "v")
 
 	// Generate a second record and truncate it in the key section
 	var buf bytes.Buffer
-	_, _ = writeKV(&buf, TypeSet, "xyz", "ab") // 3-byte key, 2-byte value
+	_, _ = writeRecord(&buf, TypeSet, "xyz", "ab") // 3-byte key, 2-byte value
 	fullRecord := buf.Bytes()
 	// Write complete header (18 bytes) + only 1 byte of the 3-byte key
 	truncatedRecord := append(fullRecord[:hdrLen], fullRecord[hdrLen]) // header + first key byte
@@ -181,11 +181,11 @@ func TestTruncatedValue(t *testing.T) {
 	f, _ := os.Create(filepath.Join(dir, "seg001"))
 
 	// write one good record
-	_, _ = writeKV(f, TypeSet, "k", "v")
+	_, _ = writeRecord(f, TypeSet, "k", "v")
 
 	// Generate a second record and truncate it in the value section
 	var buf bytes.Buffer
-	_, _ = writeKV(&buf, TypeSet, "hi", "XY") // 2-byte key, 2-byte value
+	_, _ = writeRecord(&buf, TypeSet, "hi", "XY") // 2-byte key, 2-byte value
 	fullRecord := buf.Bytes()
 	// Write complete header (18 bytes) + full key (2 bytes) + only 1 byte of the 2-byte value
 	truncatedRecord := append(fullRecord[:hdrLen+2], fullRecord[hdrLen+2]) // header + key + first value byte
