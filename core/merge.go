@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -65,12 +66,8 @@ func (db *DB) merge() (rerr error) {
 		// in case of an unhandled error, we're rolling back
 		// by removing all segments created for the merge
 		if rerr != nil {
-			log.Println("merge failed, removing merge segments...")
-			for _, seg := range out.segments {
-				// just ignore the individual errors, in the worst case
-				// they're not removed, and will be logged on re-open
-				_ = seg.file.Close()
-				_ = os.Remove(getSegmentPath(db.dir, seg.id))
+			if err := db.abortMerge(out); err != nil {
+				log.Printf("abort merge: %v", err)
 			}
 		}
 	}()
@@ -183,19 +180,35 @@ func (db *DB) merge() (rerr error) {
 	}
 
 	if err := db.overwriteManifest(); err != nil {
-		return fmt.Errorf("overwriteManifest: %w", err)
+		return fmt.Errorf("overwrite manifest: %w", err)
 	}
 
 	// remove old segment files; ignore errors and log them
 	for _, seg := range toMerge {
 		if err := seg.file.Close(); err != nil {
-			log.Printf("close old segments: %v", err)
+			log.Printf("close old segment %d: %v", seg.id, err)
 		}
 
 		if err := os.Remove(getSegmentPath(db.dir, seg.id)); err != nil {
-			log.Printf("remove old segments: %v", err)
+			log.Printf("remove old segment %d: %v", seg.id, err)
 		}
 	}
 
 	return nil
+}
+
+func (db *DB) abortMerge(out *mergeOutput) (errs error) {
+	log.Println("merge failed, releasing resources...")
+
+	for _, seg := range out.segments {
+		if err := seg.file.Close(); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("close segment %d: %w", seg.id, err))
+		}
+
+		if err := os.Remove(getSegmentPath(db.dir, seg.id)); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("remove segment %d: %w", seg.id, err))
+		}
+	}
+
+	return errs
 }
