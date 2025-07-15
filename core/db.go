@@ -173,9 +173,8 @@ func Open(dir string, opts ...Option) (rdb *DB, rerr error) {
 
 	// in case this is a new folder, we create the empty segment
 	if len(db.segments) == 0 {
-		// log.Println("No segment found, creating a new one...")
-		if err = db.addSegment(); err != nil {
-			return nil, fmt.Errorf("createsegment: %w", err)
+		if err = db.rolloverSegment(); err != nil {
+			return nil, fmt.Errorf("rollover segment: %w", err)
 		}
 	}
 
@@ -236,8 +235,8 @@ func (db *DB) claimNextSegmentId() int {
 }
 
 // creates an empty segment and appends it to the segment list.
-// Changes the writer so new data is written to this segment.
-func (db *DB) addSegment() error {
+// triggers a manifest overwrite to make the change persistent.
+func (db *DB) rolloverSegment() error {
 	seg, err := newSegment(db.dir, db.claimNextSegmentId())
 	if err != nil {
 		return fmt.Errorf("create new segment: %w", err)
@@ -345,9 +344,8 @@ func (db *DB) checkRolloverAndMerge(seg *segment) error {
 	}
 
 	// we will have a new segment active
-	err := db.addSegment()
-	if err != nil {
-		return err
+	if err := db.rolloverSegment(); err != nil {
+		return fmt.Errorf("rollover segment: %w", err)
 	}
 
 	// +1 because threshold logic checks only inactive segments
@@ -367,7 +365,7 @@ func (db *DB) Set(key, val string) error {
 
 	off, err := seg.write(key, val, TypeSet, db.fsync)
 	if err != nil {
-		return err
+		return fmt.Errorf("write key %q on segment %d: %w", key, seg.id, err)
 	}
 
 	// add current key's location to index
@@ -396,7 +394,7 @@ func (db *DB) Delete(key string) error {
 	seg := db.segments[len(db.segments)-1]
 
 	if _, err := seg.write(key, "", TypeDelete, db.fsync); err != nil {
-		return err
+		return fmt.Errorf("write key %q on segment %d: %w", key, seg.id, err)
 	}
 
 	// delete the key. this makes get calls on deleted keys more efficient

@@ -51,7 +51,7 @@ func parseSegment(dir string, id int, verifyChecksum bool) (rseg *segment, recs 
 	}
 
 	if err := rs.err; err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("scan segment %d: %w", seg.id, err)
 	}
 
 	// update segment size with the last correct offset
@@ -60,12 +60,12 @@ func parseSegment(dir string, id int, verifyChecksum bool) (rseg *segment, recs 
 	// in case where we have a corrupted record,
 	// we truncate to the last "good" offset
 	if err := seg.file.Truncate(seg.size); err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("truncate segment %d: %w", seg.id, err)
 	}
 
 	// Go to the "new" end of the file in case it's truncated
 	if _, err := seg.file.Seek(0, io.SeekEnd); err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("seek on truncated segment %d: %w", seg.id, err)
 	}
 
 	return seg, recs, nil
@@ -77,7 +77,7 @@ func (s *segment) write(key string, val string, wt WriteType, fsync bool) (int64
 
 	n, err := writeKV(s.file, wt, key, val)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("writeKV on segment %d: %w", s.id, err)
 	}
 
 	// increase file size by the written byte count
@@ -88,7 +88,7 @@ func (s *segment) write(key string, val string, wt WriteType, fsync bool) (int64
 		// fsync is crazy, it costs like 5ms. We could only accept this
 		// in group commit scenario.
 		if err := s.file.Sync(); err != nil {
-			return 0, err
+			return 0, fmt.Errorf("sync segment %d: %w", s.id, err)
 		}
 	}
 
@@ -97,14 +97,6 @@ func (s *segment) write(key string, val string, wt WriteType, fsync bool) (int64
 
 func (s *segment) read(off int64, verifyChecksum bool) (string, WriteType, error) {
 	return readKV(s.file, off, verifyChecksum)
-}
-
-func (s *segment) finalize() error {
-	if err := s.file.Sync(); err != nil {
-		return err
-	}
-
-	return nil
 }
 
 type WriteType int8

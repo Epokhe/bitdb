@@ -387,9 +387,9 @@ func TestEmptyTailSegmentReuse(t *testing.T) {
 	_ = db.Set("a", "1") // seg001 with data
 
 	// Force-create an empty seg002 and *do not* write to it.
-	err := db.addSegment()
+	err := db.rolloverSegment()
 	if err != nil {
-		t.Fatalf("addSegment: %v", err)
+		t.Fatalf("rolloverSegment: %v", err)
 	}
 
 	newSeg := db.segments[len(db.segments)-1]
