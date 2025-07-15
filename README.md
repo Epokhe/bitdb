@@ -1,6 +1,7 @@
 # BitDB
 
 [![build](https://github.com/Epokhe/bitdb/actions/workflows/build.yml/badge.svg)](https://github.com/Epokhe/bitdb/actions/workflows/build.yml)
+[![codecov](https://codecov.io/github/Epokhe/bitdb/graph/badge.svg?token=S8W8Z1TZAM)](https://codecov.io/github/Epokhe/bitdb)
 
 BitDB is a lightweight key/value store written in Go. It is a toy project that I worked on while learning Go. It follows
 a [Bitcask](https://riak.com/assets/bitcask-intro.pdf) style architecture:
