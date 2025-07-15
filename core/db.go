@@ -3,7 +3,6 @@ package core
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -34,11 +33,13 @@ type DB struct {
 	mergeEnabled      bool                       // whether merge is enabled
 	rolloverThreshold int64                      // rollover segment when the active segment reaches this
 	mergeThreshold    int                        // run merge when inactive(merge-able) segment count reaches this
+	checksumEnabled   bool                       // enable corruption checks on Open and Get
 	onMergeStart      func()                     // test hook
 	onMergeApply      func()                     // test hook
 }
 
 var ErrKeyNotFound = errors.New("key not found")
+var ErrChecksumMismatch = errors.New("checksum mismatch")
 
 func WithRolloverThreshold(n int64) Option {
 	return func(db *DB) { db.rolloverThreshold = n }
@@ -70,6 +71,10 @@ func WithOnMergeApply(f func()) Option {
 	}
 }
 
+func WithChecksumEnabled(b bool) Option {
+	return func(db *DB) { db.checksumEnabled = b }
+}
+
 type Option func(*DB)
 
 func Open(dir string, opts ...Option) (rdb *DB, rerr error) {
@@ -87,6 +92,7 @@ func Open(dir string, opts ...Option) (rdb *DB, rerr error) {
 		rolloverThreshold: 1 * 1024 * 1024,
 		mergeEnabled:      true,
 		mergeThreshold:    100,
+		checksumEnabled:   true,
 	}
 
 	// apply options
@@ -127,7 +133,7 @@ func Open(dir string, opts ...Option) (rdb *DB, rerr error) {
 
 	// load all segments according to parsed manifest
 	for _, id := range segIds {
-		seg, recs, err := parseSegment(db.dir, id)
+		seg, recs, err := parseSegment(db.dir, id, db.checksumEnabled)
 		if err != nil {
 			return nil, fmt.Errorf("loadsegment %q: %w", id, err)
 		}
@@ -293,12 +299,12 @@ func (db *DB) Get(key string) (string, error) {
 		return "", fmt.Errorf("%w: %q", ErrKeyNotFound, key)
 	}
 
-	val, wt, err := db.readValueAt(loc)
+	val, wt, err := loc.seg.read(loc.offset, db.checksumEnabled)
 	if err != nil {
 		// this is an unexpected error, because in normal operation,
 		// if key is on index, its corresponding value should exist on the disk file
 		// this implies possible file corruption
-		return "", fmt.Errorf("db.readValueAt recordLocation%+v: %w", loc, err)
+		return "", fmt.Errorf("seg.read recordLocation%+v: %w", loc, err)
 	}
 
 	if wt == TypeDelete {
@@ -317,35 +323,7 @@ func (db *DB) Get(key string) (string, error) {
 	return val, nil
 }
 
-// readValueAt reads back a single record at offset in two syscalls:
-//  1. ReadAt 10 bytes → header[0:4]==keyLen, header[4:8]==valLen, header[8]==writeType, header[9] reserved
-//  2. ReadAt keyLen+valLen bytes → payload
-//
-// I'm okay with two syscalls, no need to optimize them
-// because they don't lead to two disk reads thanks to page cache
-func (db *DB) readValueAt(loc *recordLocation) (val string, wt WriteType, err error) {
-	// Read both lengths at once
-	var hdr [hdrLen]byte
-	file := loc.seg.file
-	if _, err = file.ReadAt(hdr[:], loc.offset); err != nil {
-		return "", 0, err
-	}
-
-	keyLen := int(binary.LittleEndian.Uint32(hdr[0:4]))
-	valLen := int(binary.LittleEndian.Uint32(hdr[4:8]))
-	wt = WriteType(hdr[8])
-
-	// Read key+val in one go
-	buf := make([]byte, valLen)
-	if _, err = file.ReadAt(buf, loc.offset+hdrLen+int64(keyLen)); err != nil {
-		return "", wt, err
-	}
-
-	val = string(buf)
-	return val, wt, nil
-}
-
-func (db *DB) checkRolloverMerge(seg *segment) error {
+func (db *DB) checkRolloverAndMerge(seg *segment) error {
 	if seg.size < db.rolloverThreshold {
 		return nil
 	}
@@ -382,7 +360,7 @@ func (db *DB) Set(key, val string) error {
 	// index will be rebuilt anyway
 	db.index[key] = &recordLocation{seg: seg, offset: off}
 
-	if err = db.checkRolloverMerge(seg); err != nil {
+	if err = db.checkRolloverAndMerge(seg); err != nil {
 		return err
 	}
 
@@ -408,7 +386,7 @@ func (db *DB) Delete(key string) error {
 	// delete the key. this makes get calls on deleted keys more efficient
 	delete(db.index, key)
 
-	if err := db.checkRolloverMerge(seg); err != nil {
+	if err := db.checkRolloverAndMerge(seg); err != nil {
 		return err
 	}
 

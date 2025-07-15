@@ -20,12 +20,12 @@ import (
 func TestMergeRunsOnlyWhenThresholdExceeded(t *testing.T) {
 	synctest.Run(func() {
 		db, _, _ := SetupTempDB(t,
-			WithRolloverThreshold(20), // multiple records per segment
+			WithRolloverThreshold(30), // multiple records per segment
 			WithMergeThreshold(3),     // start merge after 3 inactive segments
 			WithMergeEnabled(true),
 		)
 
-		// Each Set operation adds 14 bytes (10 bytes header + 2 bytes key + 2 bytes value).
+		// Each Set operation adds 22 bytes (18 bytes header + 2 bytes key + 2 bytes value).
 		// Segment size limit is 20 bytes.
 		_ = db.Set("k1", "v1")
 		_ = db.Set("k1", "v2") // segment 1 over threshold, rollover
@@ -54,12 +54,12 @@ func TestMergeRunsOnlyWhenThresholdExceeded(t *testing.T) {
 func TestMergeKeepsLatestAndDropsObsolete(t *testing.T) {
 	synctest.Run(func() {
 		db, _, _ := SetupTempDB(t,
-			WithRolloverThreshold(20),
+			WithRolloverThreshold(30),
 			WithMergeThreshold(2),
 			WithMergeEnabled(true),
 		)
 
-		// Each Set operation adds 10 bytes header + len(key) + len(value).
+		// Each Set operation adds 18 bytes header + len(key) + len(value).
 		_ = db.Set("k1", "old")
 		_ = db.Set("k2", "old") // segment 1 over threshold, rollover
 		_ = db.Set("k1", "new")
@@ -86,13 +86,13 @@ func TestMergeKeepsLatestAndDropsObsolete(t *testing.T) {
 func TestMergeProducesMultipleSegments(t *testing.T) {
 	synctest.Run(func() {
 		db, _, _ := SetupTempDB(t,
-			WithRolloverThreshold(20),
+			WithRolloverThreshold(30),
 			WithMergeThreshold(3),
 			WithMergeEnabled(true),
 		)
 
-		// Each Set operation adds 10 bytes header + len(key) + len(value).
-		// Segment size limit is 20 bytes.
+		// Each Set operation adds 18 bytes header + len(key) + len(value).
+		// Segment size limit is 30 bytes.
 		for i := 0; i < 6; i++ {
 			k := fmt.Sprintf("k%d", i)
 			_ = db.Set(k, "v") // Segment rollover every 2 sets. Triggers merge after 2 rollovers.
@@ -129,7 +129,7 @@ func TestWritesWhileMerging(t *testing.T) {
 		var db *DB
 
 		db, _, _ = SetupTempDB(t,
-			WithRolloverThreshold(20),
+			WithRolloverThreshold(30),
 			WithMergeThreshold(2), // Merge after 2 inactive segments.
 			WithMergeEnabled(true),
 			WithOnMergeStart(func() {
@@ -161,6 +161,13 @@ func TestWritesWhileMerging(t *testing.T) {
 		// Un-pause the merge, allowing it to complete.
 		wg.Done()
 		synctest.Wait()
+
+		// todo
+		// 	i think i have to fix this test
+		// 	synctest.Wait()
+		// 	do the new sets
+		// 	wg.Done()
+		// 	this way Sets will actually happen concurrently
 
 		// k2 is merged, should have its latest value
 		if v, _ := db.Get("k2"); v != "vy" {
@@ -227,12 +234,12 @@ func TestMergeMultiRecordSegments(t *testing.T) {
 func TestMergeDisabled(t *testing.T) {
 	synctest.Run(func() {
 		db, _, _ := SetupTempDB(t,
-			WithRolloverThreshold(20),
+			WithRolloverThreshold(30),
 			WithMergeThreshold(2),
 			WithMergeEnabled(false),
 		)
 
-		// Each Set operation adds 10 bytes header + len(key) + len(value).
+		// Each Set operation adds 18 bytes header + len(key) + len(value).
 		// Segment size limit is 20 bytes.
 		for i := 0; i < 6; i++ {
 			k := fmt.Sprintf("k%d", i)
@@ -381,7 +388,7 @@ func TestMergeAfterTruncatedRecord(t *testing.T) {
 		var db *DB
 
 		db, _, _ = SetupTempDB(t,
-			WithRolloverThreshold(20),
+			WithRolloverThreshold(30),
 			WithMergeThreshold(2), // Merge after 2 inactive segments.
 			WithMergeEnabled(true),
 			WithOnMergeStart(func() {
@@ -400,7 +407,7 @@ func TestMergeAfterTruncatedRecord(t *testing.T) {
 		)
 
 		// Create two inactive segments (seg 1, seg 2).
-		// Each Set adds 12 bytes. Rollover is at 20.
+		// Each Set adds 22 bytes. Rollover is at 30.
 		_ = db.Set("k1", "v1")
 		_ = db.Set("k2", "v2") // seg1 rolls over.
 		_ = db.Set("k3", "v3")
@@ -454,7 +461,7 @@ func TestMergeDeletesOldSegments(t *testing.T) {
 		var dir string
 		var db *DB
 		db, dir, _ = SetupTempDB(t,
-			WithRolloverThreshold(20),
+			WithRolloverThreshold(30),
 			WithMergeThreshold(2),
 			WithMergeEnabled(true),
 			WithOnMergeStart(func() {
@@ -538,7 +545,7 @@ func TestMergeRollbackOnError(t *testing.T) {
 		var dir string
 		var db *DB
 		db, dir, _ = SetupTempDB(t,
-			WithRolloverThreshold(20),
+			WithRolloverThreshold(30),
 			WithMergeThreshold(2),
 			WithMergeEnabled(true),
 			WithOnMergeStart(func() {
@@ -610,7 +617,7 @@ func TestMergeRollbackOnError(t *testing.T) {
 func TestMergeHandlesDeletedKeys(t *testing.T) {
 	synctest.Run(func() {
 		db, _, _ := SetupTempDB(t,
-			WithRolloverThreshold(20),
+			WithRolloverThreshold(30),
 			WithMergeThreshold(2),
 			WithMergeEnabled(true),
 		)
