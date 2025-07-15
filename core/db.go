@@ -103,7 +103,9 @@ func Open(dir string, opts ...Option) (rdb *DB, rerr error) {
 	// if we're erroring out, run abort process
 	defer func() {
 		if rerr != nil {
-			db.AbortOnOpen()
+			if err := db.AbortOpen(); err != nil {
+				log.Printf("abort open: %v", err)
+			}
 		}
 	}()
 
@@ -127,7 +129,11 @@ func Open(dir string, opts ...Option) (rdb *DB, rerr error) {
 	mnfIds := strings.Fields(string(mnfBytes))
 	var segIds []int
 	for _, idStr := range mnfIds {
-		id, _ := strconv.Atoi(idStr) // don't expect an error
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			// this error is unexpected unless manifest file gets corrupted
+			return nil, fmt.Errorf("read manifest: %w", err)
+		}
 		segIds = append(segIds, id)
 	}
 
@@ -246,7 +252,7 @@ func (db *DB) addSegment() error {
 	return nil
 }
 
-func (db *DB) Close() error {
+func (db *DB) Close() (errs error) {
 	db.rw.Lock()
 	defer db.rw.Unlock()
 
@@ -254,34 +260,42 @@ func (db *DB) Close() error {
 	for _, s := range db.segments {
 		// block until the OS has flushed those pages to stable storage
 		if err := s.file.Sync(); err != nil {
-			return err
+			errs = errors.Join(errs, fmt.Errorf("sync segment %d: %w", s.id, err))
 		}
 
 		// close the file
 		if err := s.file.Close(); err != nil {
-			return err
+			errs = errors.Join(errs, fmt.Errorf("close segment %d: %w", s.id, err))
 		}
 	}
 
 	// close the manifest
-	_ = db.manifest.Close()
+	if err := db.manifest.Close(); err != nil {
+		errs = errors.Join(errs, fmt.Errorf("close manifest: %w", err))
+	}
 
-	return nil
+	return errs
 }
 
-// AbortOnOpen In case a failure happens during Open,
+// AbortOpen In case a failure happens during Open,
 // we need to clean-up stuff opened so far. Keeping this
 // separate from Close, which ensures graceful shutdown.
-func (db *DB) AbortOnOpen() {
+func (db *DB) AbortOpen() (errs error) {
 	// close all segments which are opened so far
 	for _, s := range db.segments {
-		_ = s.file.Close()
+		if err := s.file.Close(); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("close segment %d: %w", s.id, err))
+		}
 	}
 
 	// close the manifest if it was opened
 	if db.manifest != nil {
-		_ = db.manifest.Close()
+		if err := db.manifest.Close(); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("close manifest: %w", err))
+		}
 	}
+
+	return errs
 }
 
 // recordLocation keeps the address of a record in the multi-segment data layout
