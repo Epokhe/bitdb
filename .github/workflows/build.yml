@@ -22,5 +22,11 @@ jobs:
         run: |
           curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
             | sh -s -- -b /usr/local/bin v2.2.1
-      - name: Verify the code
-        uses: pre-commit/action@v3.0.1
+      - name: Lint code
+        run: just lint
+      - name: Test & collect coverage
+        run: just cover
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: coverage.out
