@@ -38,7 +38,7 @@ func (db *DB) tryMerge() {
 
 func (db *DB) MergeErrors() <-chan error { return db.mergeErr }
 
-func (db *DB) rolloverSegment(out *mergeOutput) (*segment, error) {
+func (db *DB) rolloverMergeSegment(out *mergeOutput) (*segment, error) {
 	// create a new merge segment
 	seg, err := newSegment(db.dir, db.claimNextSegmentId())
 	if err != nil {
@@ -72,9 +72,9 @@ func (db *DB) merge() (rerr error) {
 		}
 	}()
 
-	mergeSeg, err := db.rolloverSegment(out)
+	mergeSeg, err := db.rolloverMergeSegment(out)
 	if err != nil {
-		return err // todo errs
+		return fmt.Errorf("rollover merge segment: %w", err)
 	}
 
 	for _, seg := range toMerge {
@@ -107,14 +107,14 @@ func (db *DB) merge() (rerr error) {
 			// rollover should happen only when there's still
 			// records left, that's why it's before write.
 			if mergeSeg.size >= db.rolloverThreshold {
-				if mergeSeg, err = db.rolloverSegment(out); err != nil {
-					return err
+				if mergeSeg, err = db.rolloverMergeSegment(out); err != nil {
+					return fmt.Errorf("rollover merge segment: %w", err)
 				}
 			}
 
 			off, err := mergeSeg.write(rec.key, rec.val, TypeSet, db.fsync)
 			if err != nil {
-				return err
+				return fmt.Errorf("write key %q on segment %d: %w", rec.key, mergeSeg.id, err)
 			}
 
 			// we memorize the both the old and the new location of the record
@@ -127,7 +127,7 @@ func (db *DB) merge() (rerr error) {
 		}
 
 		if err = rs.err; err != nil {
-			return err
+			return fmt.Errorf("scan segment %d: %w", seg.id, err)
 		}
 	}
 
@@ -135,8 +135,8 @@ func (db *DB) merge() (rerr error) {
 
 	// let's first finalize the segments
 	for _, seg := range out.segments {
-		if err = seg.finalize(); err != nil {
-			return err
+		if err := seg.file.Sync(); err != nil {
+			return fmt.Errorf("sync segment %d: %w", seg.id, err)
 		}
 	}
 

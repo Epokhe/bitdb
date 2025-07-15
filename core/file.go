@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 )
 
-// todo think of a better filename?
-
 // writeFileAtomic atomically replaces the file with the full contents of data.
 // It does so by writing to a temp file in the same directory, fsyncing it,
 // renaming it over the old path, then fsyncing the directory.
@@ -21,7 +19,7 @@ func writeFileAtomic(f *os.File, data []byte) (retf *os.File, rerr error) {
 	defer func() {
 		if rerr != nil {
 			if err := os.Remove(tmpPath); err != nil {
-				log.Printf("remove temp file %s: %v", tmpPath, err)
+				log.Printf("remove temp file %q: %v", tmpPath, err)
 			}
 		}
 	}()
@@ -37,7 +35,7 @@ func writeFileAtomic(f *os.File, data []byte) (retf *os.File, rerr error) {
 	defer func() {
 		if rerr != nil {
 			if err := tmpf.Close(); err != nil {
-				log.Printf("close temp file %s: %v", tmpf.Name(), err)
+				log.Printf("close temp file %q: %v", tmpf.Name(), err)
 			}
 		}
 	}()
@@ -77,7 +75,7 @@ func writeFileAtomic(f *os.File, data []byte) (retf *os.File, rerr error) {
 
 	// Close tmp file handle because it points to wrong path
 	if err := tmpf.Close(); err != nil {
-		log.Printf("close temp file %s: %v", tmpf.Name(), err)
+		log.Printf("close temp file %q: %v", tmpf.Name(), err)
 	}
 
 	// Create new file handle that will be returned
