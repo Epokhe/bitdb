@@ -115,7 +115,7 @@ func Open(dir string, opts ...Option) (rdb *DB, rerr error) {
 
 	mnf, err := ensureManifest(db.dir)
 	if err != nil {
-		return nil, fmt.Errorf("ensuremanifest: %w", err)
+		return nil, fmt.Errorf("ensure manifest: %w", err)
 	}
 	db.manifest = mnf
 
@@ -141,7 +141,7 @@ func Open(dir string, opts ...Option) (rdb *DB, rerr error) {
 	for _, id := range segIds {
 		seg, recs, err := parseSegment(db.dir, id, db.checksumEnabled)
 		if err != nil {
-			return nil, fmt.Errorf("loadsegment %q: %w", id, err)
+			return nil, fmt.Errorf("load segment %q: %w", id, err)
 		}
 
 		// update db index with the returned records
@@ -217,7 +217,7 @@ func (db *DB) overwriteManifest() error {
 	}
 
 	if newf, err := writeFileAtomic(db.manifest, buf.Bytes()); err != nil {
-		return fmt.Errorf("atomic write manifest: %w", err)
+		return fmt.Errorf("atomic write: %w", err)
 	} else {
 		db.manifest = newf
 	}
@@ -281,6 +281,8 @@ func (db *DB) Close() (errs error) {
 // we need to clean-up stuff opened so far. Keeping this
 // separate from Close, which ensures graceful shutdown.
 func (db *DB) AbortOpen() (errs error) {
+	log.Println("open failed, releasing resources...")
+
 	// close all segments which are opened so far
 	for _, s := range db.segments {
 		if err := s.file.Close(); err != nil {

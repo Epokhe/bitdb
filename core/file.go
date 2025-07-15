@@ -1,6 +1,7 @@
 package core
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 )
@@ -12,15 +13,16 @@ import (
 // renaming it over the old path, then fsyncing the directory.
 //
 // It returns the pointer to the new file handle.
-func writeFileAtomic(f *os.File, data []byte) (*os.File, error) {
+func writeFileAtomic(f *os.File, data []byte) (retf *os.File, rerr error) {
 	path := f.Name()
 	tmpPath := path + ".tmp"
 
 	// on error, remove tmp file
-	var err error
 	defer func() {
-		if err != nil {
-			_ = os.Remove(tmpPath)
+		if rerr != nil {
+			if err := os.Remove(tmpPath); err != nil {
+				log.Printf("remove temp file %s: %v", tmpPath, err)
+			}
 		}
 	}()
 
@@ -33,8 +35,10 @@ func writeFileAtomic(f *os.File, data []byte) (*os.File, error) {
 
 	// on error, remove tmp file handle
 	defer func() {
-		if err != nil {
-			_ = tmpf.Close()
+		if rerr != nil {
+			if err := tmpf.Close(); err != nil {
+				log.Printf("close temp file %s: %v", tmpf.Name(), err)
+			}
 		}
 	}()
 
@@ -72,10 +76,12 @@ func writeFileAtomic(f *os.File, data []byte) (*os.File, error) {
 	}
 
 	// Close tmp file handle because it points to wrong path
-	_ = tmpf.Close()
+	if err := tmpf.Close(); err != nil {
+		log.Printf("close temp file %s: %v", tmpf.Name(), err)
+	}
 
 	// Create new file handle that will be returned
-	retf, err := os.OpenFile(path, os.O_RDWR, 0o644)
+	retf, err = os.OpenFile(path, os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, err
 	}

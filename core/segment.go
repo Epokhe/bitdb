@@ -38,7 +38,9 @@ func parseSegment(dir string, id int, verifyChecksum bool) (rseg *segment, recs 
 
 	defer func() {
 		if rerr != nil {
-			_ = seg.file.Close()
+			if err := seg.file.Close(); err != nil {
+				log.Printf("close segment %d: %v", seg.id, err)
+			}
 		}
 	}()
 
