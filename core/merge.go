@@ -79,7 +79,7 @@ func (db *DB) merge() (rerr error) {
 
 	for _, seg := range toMerge {
 		// we don't do corruption checks on merge, there's not much point
-		rs := newRecordScanner(seg, false)
+		rs := newRecordScanner(seg.file, false)
 		for rs.scan() {
 			rec := rs.record
 
