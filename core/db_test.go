@@ -609,7 +609,7 @@ func TestCorruptionDetection(t *testing.T) {
 
 	// Step 3: Corrupt the record while DB is open
 	f, _ := os.OpenFile(filepath.Join(dir, "seg001"), os.O_WRONLY, 0644)
-	f.Seek(hdrLen+4, 0) // 4 = len("test")
+	_, _ = f.Seek(hdrLen+4, 0) // 4 = len("test")
 	_, _ = f.WriteString("CORRUPTED12")
 	_ = f.Close()
 
