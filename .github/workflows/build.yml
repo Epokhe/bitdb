@@ -27,7 +27,9 @@ jobs:
       - name: Test & collect coverage
         run: just cover
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v5
         with:
+          disable_search: true
           files: coverage.out
+          slug: Epokhe/bitdb
           token: ${{ secrets.CODECOV_TOKEN }}
