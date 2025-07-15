@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -111,23 +112,27 @@ func TestManyKeys(t *testing.T) {
 func TestTruncatedHeader(t *testing.T) {
 	_, dir, _ := SetupTempDB(t, WithMergeEnabled(false))
 
-	// Manually write a valid record + only half of the next header
+	// Manually write a valid record + truncated second record
 	f, _ := os.Create(filepath.Join(dir, "seg001"))
-	// header+key+val of ("x"→"y")
-	_, _ = f.Write([]byte{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 'x', 'y'})
-	// now write only 2 of the next 10 header bytes
-	_, _ = f.Write([]byte{0x02, 0x00})
+	// Write one good record
+	_, _ = writeKV(f, TypeSet, "k", "v")
+
+	// Generate a second record and write a truncated version of it to simulate corruption
+	var buf bytes.Buffer
+	_, _ = writeKV(&buf, TypeSet, "second", "value")
+	truncatedRecord := buf.Bytes()[:2] // only first 2 bytes of the 18-byte header
+	_, _ = f.Write(truncatedRecord)
 	_ = f.Close()
 
-	// Open should succeed, index should only contain "x"
+	// Open should succeed, index should only contain "k"
 	db, err := Open(dir, WithMergeEnabled(false))
 	if err != nil {
 		t.Fatalf("Open on truncated header: %v", err)
 	}
 
 	// good record should be indexed
-	if val, err := db.Get("x"); err != nil || val != "y" {
-		t.Errorf("expected x→y, got %q, %v", val, err)
+	if val, err := db.Get("k"); err != nil || val != "v" {
+		t.Errorf("expected k→v, got %q, %v", val, err)
 	}
 
 	// second key should not be indexed
@@ -142,12 +147,15 @@ func TestTruncatedKey(t *testing.T) {
 	f, _ := os.Create(filepath.Join(dir, "seg001"))
 
 	// write one good record
-	_, _ = f.Write([]byte{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 'k', 'v'})
+	_, _ = writeKV(f, TypeSet, "k", "v")
 
-	// write header for keyLen=3,valLen=2, then only 1 byte of the key
-	_, _ = f.Write([]byte{3, 0, 0, 0, 2, 0, 0, 0})
-	// only 1 of the 3 key bytes
-	_, _ = f.Write([]byte("x"))
+	// Generate a second record and truncate it in the key section
+	var buf bytes.Buffer
+	_, _ = writeKV(&buf, TypeSet, "xyz", "ab") // 3-byte key, 2-byte value
+	fullRecord := buf.Bytes()
+	// Write complete header (18 bytes) + only 1 byte of the 3-byte key
+	truncatedRecord := append(fullRecord[:hdrLen], fullRecord[hdrLen]) // header + first key byte
+	_, _ = f.Write(truncatedRecord)
 	_ = f.Close()
 
 	db, err := Open(dir, WithMergeEnabled(false))
@@ -170,16 +178,18 @@ func TestTruncatedKey(t *testing.T) {
 func TestTruncatedValue(t *testing.T) {
 	_, dir, _ := SetupTempDB(t, WithMergeEnabled(false))
 
-	// write one good record, then header+full key, but only 1 of 2 value bytes
 	f, _ := os.Create(filepath.Join(dir, "seg001"))
-	// good record: keyLen=1, valLen=1, type=1, reserved=0, "k","v"
-	_, _ = f.Write([]byte{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 'k', 'v'})
-	// next header: keyLen=2, valLen=2
-	_, _ = f.Write([]byte{2, 0, 0, 0, 2, 0, 0, 0})
-	// write full key "hi"
-	_, _ = f.Write([]byte("hi"))
-	// only 1 of 2 value bytes
-	_, _ = f.Write([]byte("X"))
+
+	// write one good record
+	_, _ = writeKV(f, TypeSet, "k", "v")
+
+	// Generate a second record and truncate it in the value section
+	var buf bytes.Buffer
+	_, _ = writeKV(&buf, TypeSet, "hi", "XY") // 2-byte key, 2-byte value
+	fullRecord := buf.Bytes()
+	// Write complete header (18 bytes) + full key (2 bytes) + only 1 byte of the 2-byte value
+	truncatedRecord := append(fullRecord[:hdrLen+2], fullRecord[hdrLen+2]) // header + key + first value byte
+	_, _ = f.Write(truncatedRecord)
 	_ = f.Close()
 
 	db, err := Open(dir, WithMergeEnabled(false))
@@ -316,10 +326,12 @@ func TestRecoveryAcrossSegmentBoundary(t *testing.T) {
 	_ = db.Set("foo", "B")
 	_ = db.Set("foo", "C")
 
-	// ─── CRASH: truncate the last segment before C's header ───
-	active := db.segments[len(db.segments)-1]
-	off := db.index["foo"].offset // where C's header would start
-	f, _ := os.OpenFile(getSegmentPath(db.dir, active.id), os.O_WRONLY, 0)
+	// ─── CRASH: truncate the segment containing C's record ───
+	loc := db.index["foo"]
+	off := loc.offset // where C's header would start
+	segPath := getSegmentPath(db.dir, loc.seg.id)
+
+	f, _ := os.OpenFile(segPath, os.O_WRONLY, 0)
 	_ = f.Truncate(off)
 	_ = f.Close()
 
@@ -495,14 +507,14 @@ func TestDeletePersistence(t *testing.T) {
 }
 
 func TestDeleteTriggersRollover(t *testing.T) {
-	db, _, _ := SetupTempDB(t, WithRolloverThreshold(25), WithMergeEnabled(false))
+	db, _, _ := SetupTempDB(t, WithRolloverThreshold(35), WithMergeEnabled(false))
 
-	_ = db.Set("key1", "value1") // 20 bytes (10 header + 4 key + 6 value)
+	_ = db.Set("key1", "value1") // 28 bytes (18 header + 4 key + 6 value)
 
 	countBefore := len(db.segments)
 
-	// This delete should trigger rollover (20 + 14 = 34 > 25)
-	_ = db.Delete("key1") // 14 bytes (10 header + 4 key + 0 value)
+	// This delete should trigger rollover (28 + 22 = 50 > 35)
+	_ = db.Delete("key1") // 22 bytes (18 header + 4 key + 0 value)
 
 	countAfter := len(db.segments)
 	if countAfter != countBefore+1 {
@@ -580,5 +592,54 @@ func TestDeletedKeysNotInIndexAfterReopen(t *testing.T) {
 	// Existing key should remain
 	if val, err := db2.Get("b"); err != nil || val != "2" {
 		t.Errorf("expected b=2 after restart, got %q, %v", val, err)
+	}
+}
+
+// TestCorruptionDetection verifies that when corruption detection is enabled, BitDB detects corrupted data.
+func TestCorruptionDetection(t *testing.T) {
+	// Step 1: Add a good record
+	db, dir, _ := SetupTempDB(t, WithMergeEnabled(false))
+	_ = db.Set("test", "original123")
+
+	// Step 2: DB is already open, record is valid
+	val, err := db.Get("test")
+	if err != nil || val != "original123" {
+		t.Fatalf("Initial Get should succeed: got %q, %v", val, err)
+	}
+
+	// Step 3: Corrupt the record while DB is open
+	f, _ := os.OpenFile(filepath.Join(dir, "seg001"), os.O_WRONLY, 0644)
+	f.Seek(hdrLen+4, 0) // 4 = len("test")
+	_, _ = f.WriteString("CORRUPTED12")
+	_ = f.Close()
+
+	// Step 4: Try to get and expect error
+	_, err = db.Get("test")
+	if err == nil {
+		t.Fatal("Get should fail after corruption")
+	}
+	if !errors.Is(err, ErrChecksumMismatch) {
+		t.Fatalf("Expected checksum mismatch error, got: %v", err)
+	}
+	_ = db.Close()
+
+	// Step 5: Reopen with checksum disabled - should not fail
+	db, err = Open(dir, WithMergeEnabled(false), WithChecksumEnabled(false))
+	if err != nil {
+		t.Fatalf("Open with checksum disabled should succeed: %v", err)
+	}
+	val, err = db.Get("test")
+	if err != nil || val != "CORRUPTED12" {
+		t.Fatalf("Get with checksum disabled should return corrupted value: got %q, %v", val, err)
+	}
+	_ = db.Close()
+
+	// Step 6: Reopen with checksum enabled - should fail
+	_, err = Open(dir, WithMergeEnabled(false), WithChecksumEnabled(true))
+	if err == nil {
+		t.Fatal("Open with checksum enabled should fail")
+	}
+	if !errors.Is(err, ErrChecksumMismatch) {
+		t.Fatalf("Expected checksum mismatch error, got: %v", err)
 	}
 }
