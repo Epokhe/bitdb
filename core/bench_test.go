@@ -81,6 +81,40 @@ func Benchmark_Merge(b *testing.B) {
 		if err := db.merge(); err != nil {
 			b.Fatalf("merge: %v", err)
 		}
+		b.StopTimer()
+
+		// cleanup the db at the end of each iteration
+		cleanup()
+	}
+}
+
+// Benchmark_Open tests opening a database with a medium number of records
+func Benchmark_Open(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		db, dir, cleanup := SetupTempDB(b, WithMergeEnabled(false))
+
+		// Populate the database with records
+		for j := 0; j < 10000; j++ {
+			key := fmt.Sprintf("key%08d", j)
+			val := fmt.Sprintf("value%08d", j)
+			if err := db.Set(key, val); err != nil {
+				b.Fatalf("set record %d: %v", j, err)
+			}
+		}
+
+		// Close the database so we can benchmark opening it
+		if err := db.Close(); err != nil {
+			b.Fatalf("close database: %v", err)
+		}
+
+		// Benchmark: Open the database
+		b.StartTimer()
+		_, err := Open(dir, WithMergeEnabled(false))
+		if err != nil {
+			b.Fatalf("open database: %v", err)
+		}
+		b.StopTimer()
 
 		// cleanup the db at the end of each iteration
 		cleanup()
