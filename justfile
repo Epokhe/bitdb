@@ -34,8 +34,8 @@ profile NAME *ARGS:
     go tool pprof -http=0.0.0.0:1730 ./core.test cpu.out
 
 # sync to remote
-sync:
-    rsync -avzh --exclude .git ../bitdb overseer:~/
+sync HOST:
+    rsync -avzh --exclude data --exclude .idea --exclude .git "$(pwd)" {{HOST}}:~/
 
 # lint with golangci-lint
 lint:
