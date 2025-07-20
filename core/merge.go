@@ -39,6 +39,12 @@ func (db *DB) tryMerge() {
 func (db *DB) MergeErrors() <-chan error { return db.mergeErr }
 
 func (db *DB) rolloverMergeSegment(out *mergeOutput) (*segment, error) {
+	// deactivate the last segment
+	last := out.segments[len(out.segments)-1]
+	if err := last.deactivate(); err != nil {
+		return nil, fmt.Errorf("deactivate merge segment %d: %w", last.id, err)
+	}
+
 	// create a new merge segment
 	seg, err := newSegment(db.dir, db.claimNextSegmentId())
 	if err != nil {

@@ -8,14 +8,15 @@ import (
 )
 
 type segment struct {
-	id   int
-	file *os.File // open file handle for reading and writing records
-	size int64    // size of the segment file in bytes
+	id       int
+	file     *os.File // open file handle for reading and writing
+	scanFile *os.File // open file handle for sequential scanning
+	size     int64    // size of the segment file in bytes
 }
 
 func newSegment(dir string, id int) (*segment, error) {
 	path := getSegmentPath(dir, id)
-	f, err := os.Create(path)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("create segment file %q: %w", path, err)
 	}
@@ -25,46 +26,68 @@ func newSegment(dir string, id int) (*segment, error) {
 
 func parseSegment(dir string, id int, verifyChecksum bool) (rseg *segment, recs []*scannedRecord, rerr error) {
 	path := getSegmentPath(dir, id)
-	f, err := os.OpenFile(path, os.O_RDWR, 0o644)
+	f, err := os.OpenFile(path, os.O_RDWR, 0o644) // todo readonly for all but last
 	if err != nil {
 		return nil, nil, fmt.Errorf("open segment file %q: %w", path, err)
 	}
 
-	seg := &segment{id: id, file: f}
-
 	defer func() {
 		if rerr != nil {
-			if err := seg.file.Close(); err != nil {
-				log.Printf("close segment %d: %v", seg.id, err)
+			if err := f.Close(); err != nil {
+				log.Printf("close segment %d: %v", id, err)
 			}
 		}
 	}()
 
 	// collect the records from the current segment
-	rs := newRecordScanner(seg.file, verifyChecksum)
+	rs := newRecordScanner(f, verifyChecksum)
 	for rs.scan() {
 		recs = append(recs, rs.record)
 	}
 
 	if err := rs.err; err != nil {
-		return nil, nil, fmt.Errorf("scan segment %d: %w", seg.id, err)
+		return nil, nil, fmt.Errorf("scan segment %d: %w", id, err)
 	}
 
-	// update segment size with the last correct offset
-	seg.size = rs.end
+	// segment size is equal to the last scanned offset
+	size := rs.end
 
 	// in case where we have a corrupted record,
 	// we truncate to the last "good" offset
-	if err := seg.file.Truncate(seg.size); err != nil {
-		return nil, nil, fmt.Errorf("truncate segment %d: %w", seg.id, err)
+	if err := f.Truncate(size); err != nil {
+		return nil, nil, fmt.Errorf("truncate segment %d: %w", id, err)
 	}
 
 	// Go to the "new" end of the file in case it's truncated
-	if _, err := seg.file.Seek(0, io.SeekEnd); err != nil {
-		return nil, nil, fmt.Errorf("seek on truncated segment %d: %w", seg.id, err)
+	if _, err := f.Seek(0, io.SeekEnd); err != nil {
+		return nil, nil, fmt.Errorf("seek on truncated segment %d: %w", id, err)
 	}
 
+	seg := &segment{id: id, file: f, size: size}
 	return seg, recs, nil
+}
+
+// we make a segment inactive by making its file handle read-only
+func (s *segment) deactivate() error {
+	path := s.file.Name() // i think this'll work?
+
+	if err := s.file.Close(); err != nil {
+		return fmt.Errorf("close segment %d file: %w", s.id, err)
+	}
+
+	roFile, err := os.OpenFile(path, os.O_RDONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open segment file %q: %w", path, err)
+	}
+	s.file = roFile
+
+	scanFile, err := os.OpenFile(path, os.O_RDONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open segment scan file %q: %w", path, err)
+	}
+	s.scanFile = scanFile
+
+	return nil
 }
 
 // write writes record to the segment and returns the key offset

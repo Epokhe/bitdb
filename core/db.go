@@ -236,7 +236,15 @@ func (db *DB) claimNextSegmentId() int {
 
 // creates an empty segment and appends it to the segment list.
 // triggers a manifest overwrite to make the change persistent.
+// Assumes rw lock is taken.
 func (db *DB) rolloverSegment() error {
+	// deactivate the last segment
+	last := db.segments[len(db.segments)-1]
+	if err := last.deactivate(); err != nil {
+		return fmt.Errorf("deactivate segment %d: %w", last.id, err)
+	}
+
+	// create the new segment
 	seg, err := newSegment(db.dir, db.claimNextSegmentId())
 	if err != nil {
 		return fmt.Errorf("create new segment: %w", err)
@@ -255,14 +263,14 @@ func (db *DB) Close() (errs error) {
 	db.rw.Lock()
 	defer db.rw.Unlock()
 
+	// fsync the active segment
+	seg := db.segments[len(db.segments)-1]
+	if err := seg.file.Sync(); err != nil {
+		errs = errors.Join(errs, fmt.Errorf("sync segment %d: %w", seg.id, err))
+	}
+
 	// close all segments
 	for _, s := range db.segments {
-		// block until the OS has flushed those pages to stable storage
-		if err := s.file.Sync(); err != nil {
-			errs = errors.Join(errs, fmt.Errorf("sync segment %d: %w", s.id, err))
-		}
-
-		// close the file
 		if err := s.file.Close(); err != nil {
 			errs = errors.Join(errs, fmt.Errorf("close segment %d: %w", s.id, err))
 		}

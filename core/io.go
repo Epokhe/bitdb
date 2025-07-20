@@ -213,8 +213,7 @@ func (rs *recordScanner) scan() bool {
 	//}
 
 	// advance offset for next record
-	rs.end += int64(hdrLen + keyLen + valLen)
-
+	rs.end += int64(totalLen)
 	return true
 }
 

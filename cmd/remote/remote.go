@@ -76,7 +76,7 @@ func StartRPC(db *core.DB, addr string) (string, func(), error) {
 	cleanup := func() {
 		_ = listener.Close() // stop accepting new conns
 
-		// flush & close file
+		// sync & close file
 		if err := db.Close(); err != nil {
 			log.Fatalf("db close: %v\n", err)
 		}
