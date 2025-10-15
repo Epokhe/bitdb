@@ -214,7 +214,7 @@ func TestOverwriteAfterPartialAppend(t *testing.T) {
 	_ = db.Set("b", "2")
 
 	// Capture the offset where "c" would go:
-	active := db.segments[len(db.segments)-1]
+	active := db.activeSeg
 	offC := active.size
 
 	// 2) Simulate a crash *during* the third Set:
@@ -285,7 +285,7 @@ func TestSegmentCount(t *testing.T) {
 	}
 
 	// observe on-disk state
-	segs := len(db.segments)
+	segs := db.TotalSegmentCount()
 	size, err := db.DiskSize()
 	if err != nil {
 		t.Fatalf("DiskSize: %v", err)
@@ -392,7 +392,7 @@ func TestEmptyTailSegmentReuse(t *testing.T) {
 		t.Fatalf("rolloverSegment: %v", err)
 	}
 
-	newSeg := db.segments[len(db.segments)-1]
+	newSeg := db.activeSeg
 	empty := getSegmentPath(db.dir, newSeg.id)
 	_ = db.Close()
 
@@ -434,7 +434,7 @@ func TestNextFileNumberSkipsGaps(t *testing.T) {
 	_ = db.Set("k", "v")
 	_ = db.Set("k", "v") // second write should roll to new segment
 
-	active := db.segments[len(db.segments)-1]
+	active := db.activeSeg
 	if active.id <= 9 {
 		t.Fatalf("expected new id >9, got %d", active.id)
 	}
@@ -511,12 +511,12 @@ func TestDeleteTriggersRollover(t *testing.T) {
 
 	_ = db.Set("key1", "value1") // 28 bytes (18 header + 4 key + 6 value)
 
-	countBefore := len(db.segments)
+	countBefore := len(db.inactives)
 
 	// This delete should trigger rollover (28 + 22 = 50 > 35)
 	_ = db.Delete("key1") // 22 bytes (18 header + 4 key + 0 value)
 
-	countAfter := len(db.segments)
+	countAfter := len(db.inactives)
 	if countAfter != countBefore+1 {
 		t.Errorf("expected rollover, segments: %d -> %d", countBefore, countAfter)
 	}

@@ -35,7 +35,7 @@ func TestMergeRunsOnlyWhenThresholdExceeded(t *testing.T) {
 		// Currently there are 2 inactive segments, below merge threshold.
 
 		synctest.Wait()
-		if got := len(db.segments); got != 3 {
+		if got := db.TotalSegmentCount(); got != 3 {
 			t.Fatalf("merge ran too early; segments=%d", got)
 		}
 
@@ -44,7 +44,7 @@ func TestMergeRunsOnlyWhenThresholdExceeded(t *testing.T) {
 
 		synctest.Wait() // wait until merge goroutine exits
 
-		if got := len(db.segments); got > 3 {
+		if got := db.TotalSegmentCount(); got > 3 {
 			t.Fatalf("expected ≤3 segments after merge, got %d", got)
 		}
 	})
@@ -69,7 +69,7 @@ func TestMergeKeepsLatestAndDropsObsolete(t *testing.T) {
 
 		// since `old` values are dropped, we will have 2 segments merged to one,
 		// and 1 active segment: 2 segments in total
-		if got := len(db.segments); got != 2 {
+		if got := db.TotalSegmentCount(); got != 2 {
 			t.Fatalf("expected 2 segments after merge, got %d", got)
 		}
 
@@ -102,14 +102,14 @@ func TestMergeProducesMultipleSegments(t *testing.T) {
 		synctest.Wait()
 
 		// now, we should still have 4 segments, but they should have new ids
-		if got := len(db.segments); got != 4 {
+		if got := db.TotalSegmentCount(); got != 4 {
 			t.Fatalf("expected 4 segments after merge, got %d", got)
 		}
 
 		// check new ids. note that only first 3 should be updated, so they should be 5,6,7,4
 		want := []int{5, 6, 7, 4}
 
-		for i, seg := range db.segments {
+		for i, seg := range db.inactives {
 			if seg.id != want[i] {
 				t.Fatalf("expected seg id %d, got %d", want[i], seg.id)
 			}
@@ -181,14 +181,14 @@ func TestWritesWhileMerging(t *testing.T) {
 			t.Fatalf("want k6=v6, got %q", v)
 		}
 
-		// after merge, we should have seg1 and seg2 merge, decreasing segment count
-		if got := len(db.segments); got != 4 {
-			t.Fatalf("expected 4 segments without merge, got %d", got)
+		// after merge, we should have seg1 and seg2 merge, plus new segments created during merge
+		if got := db.TotalSegmentCount(); got != 5 {
+			t.Fatalf("expected 5 segments total after merge, got %d", got)
 		}
 
 		// Verify that only ONE merge ran by checking the final segment ids.
 		want := []int{6, 3, 4, 5}
-		for i, seg := range db.segments {
+		for i, seg := range db.inactives {
 			if seg.id != want[i] {
 				t.Fatalf("expected seg id %d, got %d", want[i], seg.id)
 			}
@@ -248,11 +248,11 @@ func TestMergeDisabled(t *testing.T) {
 
 		synctest.Wait()
 
-		if got := len(db.segments); got != 4 {
+		if got := db.TotalSegmentCount(); got != 4 {
 			t.Fatalf("expected 4 segments without merge, got %d", got)
 		}
 		want := []int{1, 2, 3, 4}
-		for i, seg := range db.segments {
+		for i, seg := range db.inactives {
 			if seg.id != want[i] {
 				t.Fatalf("expected seg id %d, got %d", want[i], seg.id)
 			}
@@ -279,8 +279,8 @@ func TestMergePersistence(t *testing.T) {
 		synctest.Wait()
 
 		// save segment ids before closing the db
-		segs := make([]int, len(db.segments))
-		for i, seg := range db.segments {
+		segs := make([]int, len(db.inactives))
+		for i, seg := range db.inactives {
 			segs[i] = seg.id
 		}
 
@@ -306,11 +306,11 @@ func TestMergePersistence(t *testing.T) {
 		}
 		defer reopened.Close() // nolint:errcheck
 
-		if len(reopened.segments) != len(segs) {
+		if len(reopened.inactives) != len(segs) {
 			t.Fatalf("segment count mismatch after reopen: got %d want %d",
-				len(reopened.segments), len(segs))
+				len(reopened.inactives), len(segs))
 		}
-		for i, seg := range reopened.segments {
+		for i, seg := range reopened.inactives {
 			if seg.id != segs[i] {
 				t.Fatalf("seg id mismatch at %d: got %d want %d", i, seg.id, segs[i])
 			}
@@ -375,7 +375,7 @@ func TestMultipleSequentialMerges(t *testing.T) {
 			t.Fatalf("expected %d merges, got %d", expectedMerges, mergeCount)
 		}
 		// same key getting overwritten should keep inactive segments at 1 length
-		if got := len(db.segments); got != 2 {
+		if got := db.TotalSegmentCount(); got != 2 {
 			t.Fatalf("expected 2 segments after merge, got %d", got)
 		}
 	})
@@ -399,10 +399,29 @@ func TestMergeAfterTruncatedRecord(t *testing.T) {
 				// The merge is running on segments 1 and 2. Let's truncate seg 1.
 				// seg001 contains k1 and k2. We will truncate it mid-way through k2's record.
 				// Truncate the file by removing the last byte of the last record.
-				err := db.segments[0].file.Truncate(db.segments[0].size - 1)
+				// Since segment files are now read-only, we need to reopen with write access.
+				seg := db.inactives[0]
+				path := seg.file.Name()
+
+				// Close the read-only handle
+				if err := seg.file.Close(); err != nil {
+					t.Fatalf("close segment file: %v", err)
+				}
+
+				// Reopen with write permissions for truncation
+				f, err := os.OpenFile(path, os.O_RDWR, 0o644)
+				if err != nil {
+					t.Fatalf("reopen segment file: %v", err)
+				}
+
+				// Truncate the file by removing the last byte of the last record
+				err = f.Truncate(seg.size - 1)
 				if err != nil {
 					t.Fatalf("truncate file in callback: %v", err)
 				}
+
+				// Replace the segment's file handle with the truncated one
+				seg.file = f
 			}),
 		)
 
@@ -473,7 +492,7 @@ func TestMergeDeletesOldSegments(t *testing.T) {
 
 				// get the segments that will be merged
 				db.rw.RLock()
-				for _, seg := range db.segments[:len(db.segments)-1] {
+				for _, seg := range db.inactives[:len(db.inactives)-1] {
 					// seg001, seg002, seg003
 					segsBefore.Add(fmt.Sprintf("seg%03d", seg.id))
 				}
@@ -529,8 +548,11 @@ func TestMergeDeletesOldSegments(t *testing.T) {
 		// get the updated db.segments
 		wantIds := mapset.NewSet[string]()
 		db.rw.RLock()
-		for _, seg := range db.segments {
+		for _, seg := range db.inactives {
 			wantIds.Add(fmt.Sprintf("%d", seg.id))
+		}
+		if db.activeSeg != nil {
+			wantIds.Add(fmt.Sprintf("%d", db.activeSeg.id))
 		}
 		db.rw.RUnlock()
 
@@ -550,7 +572,7 @@ func TestMergeRollbackOnError(t *testing.T) {
 			WithMergeEnabled(true),
 			WithOnMergeStart(func() {
 				// Close the first segment file so scanning fails mid-merge
-				if err := db.segments[0].file.Close(); err != nil {
+				if err := db.inactives[0].file.Close(); err != nil {
 					t.Fatalf("close segment: %v", err)
 				}
 			}),
@@ -564,9 +586,12 @@ func TestMergeRollbackOnError(t *testing.T) {
 
 		// Record pre-merge segment ids.
 		db.rw.RLock()
-		wantIDs := make([]int, len(db.segments))
-		for i, seg := range db.segments {
+		wantIDs := make([]int, len(db.inactives))
+		for i, seg := range db.inactives {
 			wantIDs[i] = seg.id
+		}
+		if db.activeSeg != nil {
+			wantIDs = append(wantIDs, db.activeSeg.id)
 		}
 		db.rw.RUnlock()
 
@@ -584,14 +609,22 @@ func TestMergeRollbackOnError(t *testing.T) {
 
 		// Ensure segments unchanged.
 		db.rw.RLock()
-		if len(db.segments) != len(wantIDs) {
+		if db.TotalSegmentCount() != len(wantIDs) {
 			db.rw.RUnlock()
-			t.Fatalf("segment count changed: got %d want %d", len(db.segments), len(wantIDs))
+			t.Fatalf("segment count changed: got %d want %d", db.TotalSegmentCount(), len(wantIDs))
 		}
-		for i, seg := range db.segments {
-			if seg.id != wantIDs[i] {
+		// Check inactive segments
+		for i, seg := range db.inactives {
+			if i >= len(wantIDs) || seg.id != wantIDs[i] {
 				db.rw.RUnlock()
-				t.Fatalf("segment id %d changed: got %d want %d", i, seg.id, wantIDs[i])
+				t.Fatalf("inactive segment id %d changed: got %d want %d", i, seg.id, wantIDs[i])
+			}
+		}
+		// Check active segment if it exists
+		if db.activeSeg != nil && len(wantIDs) > len(db.inactives) {
+			if db.activeSeg.id != wantIDs[len(db.inactives)] {
+				db.rw.RUnlock()
+				t.Fatalf("active segment id changed: got %d want %d", db.activeSeg.id, wantIDs[len(db.inactives)])
 			}
 		}
 		db.rw.RUnlock()
@@ -638,12 +671,12 @@ func TestMergeHandlesDeletedKeys(t *testing.T) {
 		}
 
 		// We expect 2 segments total (1 merged + 1 active, both with no data)
-		if len(db.segments) != 2 {
-			t.Errorf("expected 2 segments after merging all deletions, got %d", len(db.segments))
+		if db.TotalSegmentCount() != 2 {
+			t.Errorf("expected 2 segments after merging all deletions, got %d", db.TotalSegmentCount())
 		}
 
 		// Verify merged segment is empty
-		if seg := db.segments[0]; seg.size > 0 {
+		if seg := db.inactives[0]; seg.size > 0 {
 			t.Errorf("merged segment %d should be empty but has size %d", seg.id, seg.size)
 		}
 

@@ -8,7 +8,8 @@ import (
 )
 
 type mergeOutput struct {
-	segments     []*segment
+	segments     []*segment // inactive merge segments (all have scanFile)
+	activeSeg    *segment   // active merge segment
 	indexChanges map[string][2]*recordLocation
 }
 
@@ -39,28 +40,31 @@ func (db *DB) tryMerge() {
 func (db *DB) MergeErrors() <-chan error { return db.mergeErr }
 
 func (db *DB) rolloverMergeSegment(out *mergeOutput) (*segment, error) {
-	// deactivate the last segment
-	last := out.segments[len(out.segments)-1]
-	if err := last.deactivate(); err != nil {
-		return nil, fmt.Errorf("deactivate merge segment %d: %w", last.id, err)
+	// seal current active merge segment and move to segments array
+	if out.activeSeg != nil {
+		if err := out.activeSeg.seal(); err != nil {
+			return nil, fmt.Errorf("seal merge segment %d: %w", out.activeSeg.id, err)
+		}
+		out.segments = append(out.segments, out.activeSeg)
 	}
 
-	// create a new merge segment
+	// create new active merge segment
 	seg, err := newSegment(db.dir, db.claimNextSegmentId())
 	if err != nil {
 		return nil, fmt.Errorf("create merge segment: %w", err)
 	}
-
-	out.segments = append(out.segments, seg)
+	out.activeSeg = seg
 	return seg, nil
 }
 
 func (db *DB) merge() (rerr error) {
 	// we will only merge inactive segments because they are read-only
 	// new segments added during the merge are also out of scope
+	// activeSeg is already separate, so we merge all of db.segments
 	db.rw.RLock()
-	inputLen := len(db.segments) - 1 // leave out last(active) segment
-	toMerge := db.segments[:inputLen]
+	inputLen := len(db.inactives) // all segments are inactive now
+	toMerge := make([]*segment, inputLen)
+	copy(toMerge, db.inactives)
 	db.rw.RUnlock()
 
 	// input segments are decided, run the callback for testing
@@ -153,9 +157,17 @@ func (db *DB) merge() (rerr error) {
 	db.rw.Lock()
 	defer db.rw.Unlock()
 
-	// merged segments replace their corresponding `inputLen` counterpart
-	// and un-merged segments are appended
-	db.segments = append(out.segments, db.segments[inputLen:]...)
+	// merged segments replace the input segments completely
+	// since activeSeg is separate, we replace db.segments with merged result
+	// and finalize the merge active segment (if any) as inactive
+	if out.activeSeg != nil {
+		if err := out.activeSeg.seal(); err != nil {
+			return fmt.Errorf("seal final merge segment: %w", err)
+		}
+		db.inactives = append(out.segments, out.activeSeg)
+	} else {
+		db.inactives = out.segments
+	}
 
 	// overwrite index with merged entries
 	// however, we should be careful about the updated keys
@@ -194,6 +206,11 @@ func (db *DB) merge() (rerr error) {
 		if err := seg.file.Close(); err != nil {
 			log.Printf("close old segment %d: %v", seg.id, err)
 		}
+		if seg.scanFile != nil {
+			if err := seg.scanFile.Close(); err != nil {
+				log.Printf("close old segment %d scan file: %v", seg.id, err)
+			}
+		}
 
 		if err := os.Remove(getSegmentPath(db.dir, seg.id)); err != nil {
 			log.Printf("remove old segment %d: %v", seg.id, err)
@@ -206,9 +223,25 @@ func (db *DB) merge() (rerr error) {
 func (db *DB) abortMerge(out *mergeOutput) (errs error) {
 	log.Println("merge failed, releasing resources...")
 
+	// clean up active merge segment
+	if out.activeSeg != nil {
+		if err := out.activeSeg.file.Close(); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("close active merge segment %d: %w", out.activeSeg.id, err))
+		}
+		if err := os.Remove(getSegmentPath(db.dir, out.activeSeg.id)); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("remove active merge segment %d: %w", out.activeSeg.id, err))
+		}
+	}
+
+	// clean up inactive merge segments
 	for _, seg := range out.segments {
 		if err := seg.file.Close(); err != nil {
 			errs = errors.Join(errs, fmt.Errorf("close segment %d: %w", seg.id, err))
+		}
+		if seg.scanFile != nil {
+			if err := seg.scanFile.Close(); err != nil {
+				errs = errors.Join(errs, fmt.Errorf("close segment %d scan file: %w", seg.id, err))
+			}
 		}
 
 		if err := os.Remove(getSegmentPath(db.dir, seg.id)); err != nil {
